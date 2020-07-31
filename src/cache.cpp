@@ -1,5 +1,5 @@
 /*
- * s3fs - FUSE-based file system backed by Amazon S3
+ * ossfs - FUSE-based file system backed by InspurCloud OSS
  *
  * Copyright(C) 2007 Randy Rizun <rrizun@gmail.com>
  *
@@ -36,8 +36,8 @@
 #include <list>
 
 #include "cache.h"
-#include "s3fs.h"
-#include "s3fs_util.h"
+#include "ossfs.h"
+#include "ossfs_util.h"
 #include "string_util.h"
 
 using namespace std;
@@ -56,12 +56,12 @@ using namespace std;
 #endif
 
 #ifdef HAVE_CLOCK_GETTIME
-static int s3fs_clock_gettime(int clk_id, struct timespec* ts)
+static int ossfs_clock_gettime(int clk_id, struct timespec* ts)
 {
   return clock_gettime(static_cast<clockid_t>(clk_id), ts);
 }
 #else
-static int s3fs_clock_gettime(int clk_id, struct timespec* ts)
+static int ossfs_clock_gettime(int clk_id, struct timespec* ts)
 {
   struct timeval now;
   if(0 != gettimeofday(&now, NULL)){
@@ -75,7 +75,7 @@ static int s3fs_clock_gettime(int clk_id, struct timespec* ts)
 
 inline void SetStatCacheTime(struct timespec& ts)
 {
-  if(-1 == s3fs_clock_gettime(CLOCK_MONOTONIC_COARSE, &ts)){
+  if(-1 == ossfs_clock_gettime(CLOCK_MONOTONIC_COARSE, &ts)){
     ts.tv_sec  = time(NULL);
     ts.tv_nsec = 0;
   }
@@ -147,7 +147,7 @@ StatCache::StatCache() : IsExpireTime(false), IsExpireIntervalType(false), Expir
     stat_cache.clear();
     pthread_mutexattr_t attr;
     pthread_mutexattr_init(&attr);
-    pthread_mutexattr_settype(&attr, S3FS_MUTEX_RECURSIVE);
+    pthread_mutexattr_settype(&attr, OSSFS_MUTEX_RECURSIVE);
     pthread_mutex_init(&StatCache::stat_cache_lock, &attr);
   }else{
     abort();
@@ -217,7 +217,7 @@ void StatCache::Clear()
     delete (*iter).second;
   }
   stat_cache.clear();
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 }
 
 bool StatCache::GetStat(string& key, struct stat* pst, headers_t* meta, bool overcheck, const char* petag, bool* pisforce)
@@ -266,11 +266,11 @@ bool StatCache::GetStat(string& key, struct stat* pst, headers_t* meta, bool ove
       }
       if(is_delete_cache){
         // not hit by different ETag
-        S3FS_PRN_DBG("stat cache not hit by ETag[path=%s][time=%jd.%09ld][hit count=%lu][ETag(%s)!=(%s)]",
+        OSSFS_PRN_DBG("stat cache not hit by ETag[path=%s][time=%jd.%09ld][hit count=%lu][ETag(%s)!=(%s)]",
           strpath.c_str(), (intmax_t)(ent->cache_date.tv_sec), ent->cache_date.tv_nsec, ent->hit_count, petag ? petag : "null", stretag.c_str());
       }else{
         // hit 
-        S3FS_PRN_DBG("stat cache hit [path=%s][time=%jd.%09ld][hit count=%lu]",
+        OSSFS_PRN_DBG("stat cache hit [path=%s][time=%jd.%09ld][hit count=%lu]",
           strpath.c_str(), (intmax_t)(ent->cache_date.tv_sec), ent->cache_date.tv_nsec, ent->hit_count);
 
         if(pst!= NULL){
@@ -347,7 +347,7 @@ bool StatCache::AddStat(std::string& key, headers_t& meta, bool forcedir, bool n
   if(!no_truncate && CacheSize< 1){
     return true;
   }
-  S3FS_PRN_INFO3("add stat cache entry[path=%s]", key.c_str());
+  OSSFS_PRN_INFO3("add stat cache entry[path=%s]", key.c_str());
 
   bool found;
   bool do_truncate;
@@ -391,8 +391,8 @@ bool StatCache::AddStat(std::string& key, headers_t& meta, bool forcedir, bool n
       ent->meta[iter->first] = value;
     }else if(tag == "last-modified"){
       ent->meta[iter->first] = value;
-    }else if(tag.substr(0, 5) == "x-amz"){
-      ent->meta[tag] = value;		// key is lower case for "x-amz"
+    }else if(tag.substr(0, 5) == "x-oss"){
+      ent->meta[tag] = value;		// key is lower case for "x-oss"
     }
   }
 
@@ -417,7 +417,7 @@ bool StatCache::AddNoObjectCache(string& key)
   if(CacheSize < 1){
     return true;
   }
-  S3FS_PRN_INFO3("add no object cache entry[path=%s]", key.c_str());
+  OSSFS_PRN_INFO3("add no object cache entry[path=%s]", key.c_str());
 
   bool found;
   bool do_truncate;
@@ -527,11 +527,11 @@ bool StatCache::TruncateCache()
   for(statiterlist_t::iterator iiter = erase_iters.begin(); iiter != erase_iters.end(); ++iiter){
     stat_cache_t::iterator siter = *iiter;
 
-    S3FS_PRN_DBG("truncate stat cache[path=%s]", siter->first.c_str());
+    OSSFS_PRN_DBG("truncate stat cache[path=%s]", siter->first.c_str());
     delete siter->second;
     stat_cache.erase(siter);
   }
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return true;
 }
@@ -541,7 +541,7 @@ bool StatCache::DelStat(const char* key)
   if(!key){
     return false;
   }
-  S3FS_PRN_INFO3("delete stat cache entry[path=%s]", key);
+  OSSFS_PRN_INFO3("delete stat cache entry[path=%s]", key);
 
   AutoLock lock(&StatCache::stat_cache_lock);
 
@@ -564,7 +564,7 @@ bool StatCache::DelStat(const char* key)
       stat_cache.erase(iter);
     }
   }
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return true;
 }

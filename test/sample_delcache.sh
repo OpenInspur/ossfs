@@ -1,7 +1,7 @@
 #!/bin/sh
 #
 # This is unsupport sample deleting cache files script.
-# So s3fs's local cache files(stats and objects) grow up,
+# So ossfs's local cache files(stats and objects) grow up,
 # you need to delete these.
 # This script deletes these files with total size limit
 # by sorted atime of files.
@@ -15,11 +15,11 @@ func_usage()
   echo ""
   echo "Usage:  $1 <bucket name> <cache path> <limit size> [-silent]"
   echo "        $1 -h"
-  echo "Sample: $1 mybucket /tmp/s3fs/cache 1073741824"
+  echo "Sample: $1 mybucket /tmp/ossfs/cache 1073741824"
   echo ""
-  echo "  bucket name = bucket name which specified s3fs option"
+  echo "  bucket name = bucket name which specified ossfs option"
   echo "  cache path  = cache directory path which specified by"
-  echo "                use_cache s3fs option."
+  echo "                use_cache ossfs option."
   echo "  limit size  = limit for total cache files size."
   echo "                specify by BYTE"
   echo "  -silent     = silent mode"

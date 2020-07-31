@@ -1,5 +1,5 @@
 #
-# s3fs - FUSE-based file system backed by Amazon S3
+# ossfs - FUSE-based file system backed by InspurCloud OSS
 #
 # Copyright(C) 2007 Randy Rizun <rrizun@gmail.com>
 #
@@ -72,9 +72,10 @@ missing
 *.log
 *.trs
 default_commit_hash
-src/s3fs
+src/ossfs
 src/test_*
 test/s3proxy-*
+dist
 
 #
 # Local variables:

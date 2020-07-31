@@ -1,5 +1,5 @@
 ######################################################################
-# s3fs - FUSE-based file system backed by Amazon S3
+# ossfs - FUSE-based file system backed by InspurCloud OSS
 #
 # Copyright 2007-2008 Randy Rizun <rrizun@gmail.com>
 #

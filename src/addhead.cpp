@@ -1,5 +1,5 @@
 /*
- * s3fs - FUSE-based file system backed by Amazon S3
+ * ossfs - FUSE-based file system backed by InspurCloud OSS
  *
  * Copyright(C) 2007 Randy Rizun <rrizun@gmail.com>
  *
@@ -33,7 +33,7 @@
 #include "common.h"
 #include "addhead.h"
 #include "curl.h"
-#include "s3fs.h"
+#include "ossfs.h"
 
 using namespace std;
 
@@ -71,14 +71,14 @@ AdditionalHeader::~AdditionalHeader()
 bool AdditionalHeader::Load(const char* file)
 {
   if(!file){
-    S3FS_PRN_WARN("file is NULL.");
+    OSSFS_PRN_WARN("file is NULL.");
     return false;
   }
   Unload();
 
   ifstream AH(file);
   if(!AH.good()){
-    S3FS_PRN_WARN("Could not open file(%s).", file);
+    OSSFS_PRN_WARN("Could not open file(%s).", file);
     return false;
   }
 
@@ -112,7 +112,7 @@ bool AdditionalHeader::Load(const char* file)
       if(key.empty()){
         continue;
       }
-      S3FS_PRN_ERR("file format error: %s key(suffix) is no HTTP header value.", key.c_str());
+      OSSFS_PRN_ERR("file format error: %s key(suffix) is no HTTP header value.", key.c_str());
       Unload();
       return false;
     }
@@ -121,7 +121,7 @@ bool AdditionalHeader::Load(const char* file)
     if(0 == strncasecmp(key.c_str(), ADD_HEAD_REGEX, strlen(ADD_HEAD_REGEX))){
       // regex
       if(key.size() <= strlen(ADD_HEAD_REGEX)){
-        S3FS_PRN_ERR("file format error: %s key(suffix) does not have key string.", key.c_str());
+        OSSFS_PRN_ERR("file format error: %s key(suffix) does not have key string.", key.c_str());
         delete paddhead;
         continue;
       }
@@ -133,7 +133,7 @@ bool AdditionalHeader::Load(const char* file)
       if(0 != (result = regcomp(preg, key.c_str(), REG_EXTENDED | REG_NOSUB))){ // we do not need matching info
         char    errbuf[256];
         regerror(result, preg, errbuf, sizeof(errbuf));
-        S3FS_PRN_ERR("failed to compile regex from %s key by %s.", key.c_str(), errbuf);
+        OSSFS_PRN_ERR("failed to compile regex from %s key by %s.", key.c_str(), errbuf);
         delete preg;
         delete paddhead;
         continue;
@@ -186,7 +186,7 @@ bool AdditionalHeader::AddHeader(headers_t& meta, const char* path) const
     return true;
   }
   if(!path){
-    S3FS_PRN_WARN("path is NULL.");
+    OSSFS_PRN_WARN("path is NULL.");
     return false;
   }
 
@@ -235,13 +235,13 @@ struct curl_slist* AdditionalHeader::AddHeader(struct curl_slist* list, const ch
     list = curl_slist_sort_insert(list, iter->first.c_str(), iter->second.c_str());
   }
   meta.clear();
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
   return list;
 }
 
 bool AdditionalHeader::Dump() const
 {
-  if(!IS_S3FS_LOG_DBG()){
+  if(!IS_OSSFS_LOG_DBG()){
     return true;
   }
 
@@ -271,7 +271,7 @@ bool AdditionalHeader::Dump() const
   ssdbg << "}" << endl;
 
   // print all
-  S3FS_PRN_DBG("%s", ssdbg.str().c_str());
+  OSSFS_PRN_DBG("%s", ssdbg.str().c_str());
 
   return true;
 }

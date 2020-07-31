@@ -290,7 +290,10 @@ function test_remove_nonempty_directory {
     describe "Testing removing a non-empty directory"
     mk_test_dir
     touch "${TEST_DIR}/file"
-    rmdir "${TEST_DIR}" 2>&1 | grep -q "Directory not empty"
+    (
+        set +o pipefail
+        rmdir "${TEST_DIR}" 2>&1 | grep -q "Directory not empty"
+    )
     rm "${TEST_DIR}/file"
     rm_test_dir
 }

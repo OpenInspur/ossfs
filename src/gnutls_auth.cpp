@@ -1,5 +1,5 @@
 /*
- * s3fs - FUSE-based file system backed by Amazon S3
+ * ossfs - FUSE-based file system backed by InspurCloud OSS
  *
  * Copyright(C) 2007 Randy Rizun <rrizun@gmail.com>
  *
@@ -39,7 +39,7 @@
 #include <map>
 
 #include "common.h"
-#include "s3fs_auth.h"
+#include "ossfs_auth.h"
 
 using namespace std;
 
@@ -48,7 +48,7 @@ using namespace std;
 //-------------------------------------------------------------------
 #ifdef	USE_GNUTLS_NETTLE
 
-const char* s3fs_crypt_lib_name(void)
+const char* ossfs_crypt_lib_name(void)
 {
   static const char version[] = "GnuTLS(nettle)";
 
@@ -57,7 +57,7 @@ const char* s3fs_crypt_lib_name(void)
 
 #else	// USE_GNUTLS_NETTLE
 
-const char* s3fs_crypt_lib_name()
+const char* ossfs_crypt_lib_name()
 {
   static const char version[] = "GnuTLS(gcrypt)";
 
@@ -69,7 +69,7 @@ const char* s3fs_crypt_lib_name()
 //-------------------------------------------------------------------
 // Utility Function for global init
 //-------------------------------------------------------------------
-bool s3fs_init_global_ssl()
+bool ossfs_init_global_ssl()
 {
   if(GNUTLS_E_SUCCESS != gnutls_global_init()){
     return false;
@@ -82,7 +82,7 @@ bool s3fs_init_global_ssl()
   return true;
 }
 
-bool s3fs_destroy_global_ssl()
+bool ossfs_destroy_global_ssl()
 {
   gnutls_global_deinit();
   return true;
@@ -91,12 +91,12 @@ bool s3fs_destroy_global_ssl()
 //-------------------------------------------------------------------
 // Utility Function for crypt lock
 //-------------------------------------------------------------------
-bool s3fs_init_crypt_mutex()
+bool ossfs_init_crypt_mutex()
 {
   return true;
 }
 
-bool s3fs_destroy_crypt_mutex()
+bool ossfs_destroy_crypt_mutex()
 {
   return true;
 }
@@ -106,7 +106,7 @@ bool s3fs_destroy_crypt_mutex()
 //-------------------------------------------------------------------
 #ifdef	USE_GNUTLS_NETTLE
 
-bool s3fs_HMAC(const void* key, size_t keylen, const unsigned char* data, size_t datalen, unsigned char** digest, unsigned int* digestlen)
+bool ossfs_HMAC(const void* key, size_t keylen, const unsigned char* data, size_t datalen, unsigned char** digest, unsigned int* digestlen)
 {
   if(!key || !data || !digest || !digestlen){
     return false;
@@ -125,7 +125,7 @@ bool s3fs_HMAC(const void* key, size_t keylen, const unsigned char* data, size_t
   return true;
 }
 
-bool s3fs_HMAC256(const void* key, size_t keylen, const unsigned char* data, size_t datalen, unsigned char** digest, unsigned int* digestlen)
+bool ossfs_HMAC256(const void* key, size_t keylen, const unsigned char* data, size_t datalen, unsigned char** digest, unsigned int* digestlen)
 {
   if(!key || !data || !digest || !digestlen){
     return false;
@@ -146,7 +146,7 @@ bool s3fs_HMAC256(const void* key, size_t keylen, const unsigned char* data, siz
 
 #else	// USE_GNUTLS_NETTLE
 
-bool s3fs_HMAC(const void* key, size_t keylen, const unsigned char* data, size_t datalen, unsigned char** digest, unsigned int* digestlen)
+bool ossfs_HMAC(const void* key, size_t keylen, const unsigned char* data, size_t datalen, unsigned char** digest, unsigned int* digestlen)
 {
   if(!key || !data || !digest || !digestlen){
     return false;
@@ -166,7 +166,7 @@ bool s3fs_HMAC(const void* key, size_t keylen, const unsigned char* data, size_t
   return true;
 }
 
-bool s3fs_HMAC256(const void* key, size_t keylen, const unsigned char* data, size_t datalen, unsigned char** digest, unsigned int* digestlen)
+bool ossfs_HMAC256(const void* key, size_t keylen, const unsigned char* data, size_t datalen, unsigned char** digest, unsigned int* digestlen)
 {
   if(!key || !data || !digest || !digestlen){
     return false;
@@ -197,7 +197,7 @@ size_t get_md5_digest_length()
 }
 
 #ifdef	USE_GNUTLS_NETTLE
-unsigned char* s3fs_md5hexsum(int fd, off_t start, ssize_t size)
+unsigned char* ossfs_md5hexsum(int fd, off_t start, ssize_t size)
 {
   struct md5_ctx ctx_md5;
   unsigned char  buf[512];
@@ -220,7 +220,7 @@ unsigned char* s3fs_md5hexsum(int fd, off_t start, ssize_t size)
       break;
     }else if(-1 == bytes){
       // error
-      S3FS_PRN_ERR("file read error(%d)", errno);
+      OSSFS_PRN_ERR("file read error(%d)", errno);
       return NULL;
     }
     md5_update(&ctx_md5, bytes, buf);
@@ -241,7 +241,7 @@ unsigned char* s3fs_md5hexsum(int fd, off_t start, ssize_t size)
 
 #else	// USE_GNUTLS_NETTLE
 
-unsigned char* s3fs_md5hexsum(int fd, off_t start, ssize_t size)
+unsigned char* ossfs_md5hexsum(int fd, off_t start, ssize_t size)
 {
   gcry_md_hd_t ctx_md5;
   gcry_error_t err;
@@ -264,7 +264,7 @@ unsigned char* s3fs_md5hexsum(int fd, off_t start, ssize_t size)
 
   memset(buf, 0, 512);
   if(GPG_ERR_NO_ERROR != (err = gcry_md_open(&ctx_md5, GCRY_MD_MD5, 0))){
-    S3FS_PRN_ERR("MD5 context creation failure: %s/%s", gcry_strsource(err), gcry_strerror(err));
+    OSSFS_PRN_ERR("MD5 context creation failure: %s/%s", gcry_strsource(err), gcry_strerror(err));
     return NULL;
   }
 
@@ -276,7 +276,7 @@ unsigned char* s3fs_md5hexsum(int fd, off_t start, ssize_t size)
       break;
     }else if(-1 == bytes){
       // error
-      S3FS_PRN_ERR("file read error(%d)", errno);
+      OSSFS_PRN_ERR("file read error(%d)", errno);
       gcry_md_close(ctx_md5);
       return NULL;
     }
@@ -309,7 +309,7 @@ size_t get_sha256_digest_length()
 }
 
 #ifdef	USE_GNUTLS_NETTLE
-bool s3fs_sha256(const unsigned char* data, unsigned int datalen, unsigned char** digest, unsigned int* digestlen)
+bool ossfs_sha256(const unsigned char* data, unsigned int datalen, unsigned char** digest, unsigned int* digestlen)
 {
   (*digestlen) = static_cast<unsigned int>(get_sha256_digest_length());
   if(NULL == ((*digest) = reinterpret_cast<unsigned char*>(malloc(*digestlen)))){
@@ -324,7 +324,7 @@ bool s3fs_sha256(const unsigned char* data, unsigned int datalen, unsigned char*
   return true;
 }
 
-unsigned char* s3fs_sha256hexsum(int fd, off_t start, ssize_t size)
+unsigned char* ossfs_sha256hexsum(int fd, off_t start, ssize_t size)
 {
   struct sha256_ctx ctx_sha256;
   unsigned char     buf[512];
@@ -347,7 +347,7 @@ unsigned char* s3fs_sha256hexsum(int fd, off_t start, ssize_t size)
       break;
     }else if(-1 == bytes){
       // error
-      S3FS_PRN_ERR("file read error(%d)", errno);
+      OSSFS_PRN_ERR("file read error(%d)", errno);
       return NULL;
     }
     sha256_update(&ctx_sha256, bytes, buf);
@@ -368,7 +368,7 @@ unsigned char* s3fs_sha256hexsum(int fd, off_t start, ssize_t size)
 
 #else	// USE_GNUTLS_NETTLE
 
-bool s3fs_sha256(const unsigned char* data, unsigned int datalen, unsigned char** digest, unsigned int* digestlen)
+bool ossfs_sha256(const unsigned char* data, unsigned int datalen, unsigned char** digest, unsigned int* digestlen)
 {
   size_t len = (*digestlen) = static_cast<unsigned int>(get_sha256_digest_length());
   if(NULL == ((*digest) = reinterpret_cast<unsigned char*>(malloc(len)))){
@@ -378,7 +378,7 @@ bool s3fs_sha256(const unsigned char* data, unsigned int datalen, unsigned char*
   gcry_md_hd_t   ctx_sha256;
   gcry_error_t   err;
   if(GPG_ERR_NO_ERROR != (err = gcry_md_open(&ctx_sha256, GCRY_MD_SHA256, 0))){
-    S3FS_PRN_ERR("SHA256 context creation failure: %s/%s", gcry_strsource(err), gcry_strerror(err));
+    OSSFS_PRN_ERR("SHA256 context creation failure: %s/%s", gcry_strsource(err), gcry_strerror(err));
     free(*digest);
     return false;
   }
@@ -389,7 +389,7 @@ bool s3fs_sha256(const unsigned char* data, unsigned int datalen, unsigned char*
   return true;
 }
 
-unsigned char* s3fs_sha256hexsum(int fd, off_t start, ssize_t size)
+unsigned char* ossfs_sha256hexsum(int fd, off_t start, ssize_t size)
 {
   gcry_md_hd_t   ctx_sha256;
   gcry_error_t   err;
@@ -412,7 +412,7 @@ unsigned char* s3fs_sha256hexsum(int fd, off_t start, ssize_t size)
 
   memset(buf, 0, 512);
   if(GPG_ERR_NO_ERROR != (err = gcry_md_open(&ctx_sha256, GCRY_MD_SHA256, 0))){
-    S3FS_PRN_ERR("SHA256 context creation failure: %s/%s", gcry_strsource(err), gcry_strerror(err));
+    OSSFS_PRN_ERR("SHA256 context creation failure: %s/%s", gcry_strsource(err), gcry_strerror(err));
     return NULL;
   }
 
@@ -424,7 +424,7 @@ unsigned char* s3fs_sha256hexsum(int fd, off_t start, ssize_t size)
       break;
     }else if(-1 == bytes){
       // error
-      S3FS_PRN_ERR("file read error(%d)", errno);
+      OSSFS_PRN_ERR("file read error(%d)", errno);
       gcry_md_close(ctx_sha256);
       return NULL;
     }

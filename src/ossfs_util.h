@@ -1,5 +1,5 @@
 /*
- * s3fs - FUSE-based file system backed by Amazon S3
+ * ossfs - FUSE-based file system backed by InspurCloud OSS
  *
  * Copyright(C) 2007 Randy Rizun <rrizun@gmail.com>
  *
@@ -17,8 +17,8 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
-#ifndef S3FS_S3FS_UTIL_H_
-#define S3FS_S3FS_UTIL_H_
+#ifndef OSSFS_OSSFS_UTIL_H_
+#define OSSFS_OSSFS_UTIL_H_
 
 //-------------------------------------------------------------------
 // Typedef
@@ -26,40 +26,40 @@
 //
 // Struct
 //
-struct s3obj_entry{
+struct ossobj_entry{
   std::string normalname; // normalized name: if empty, object is normalized name.
   std::string orgname;    // original name: if empty, object is original name.
   std::string etag;
   bool        is_dir;
 
-  s3obj_entry() : is_dir(false) {}
+  ossobj_entry() : is_dir(false) {}
 };
 
-typedef std::map<std::string, struct s3obj_entry> s3obj_t;
-typedef std::list<std::string> s3obj_list_t;
+typedef std::map<std::string, struct ossobj_entry> ossobj_t;
+typedef std::list<std::string> ossobj_list_t;
 
 //
 // Class
 //
-class S3ObjList
+class OSSObjList
 {
   private:
-    s3obj_t objects;
+    ossobj_t objects;
 
   private:
     bool insert_normalized(const char* name, const char* normalized, bool is_dir);
-    const s3obj_entry* GetS3Obj(const char* name) const;
+    const ossobj_entry* GetOSSObj(const char* name) const;
 
-    s3obj_t::const_iterator begin(void) const {
+    ossobj_t::const_iterator begin(void) const {
       return objects.begin();
     }
-    s3obj_t::const_iterator end(void) const {
+    ossobj_t::const_iterator end(void) const {
       return objects.end();
     }
 
   public:
-    S3ObjList() {}
-    ~S3ObjList() {}
+    OSSObjList() {}
+    ~OSSObjList() {}
 
     bool IsEmpty(void) const {
       return objects.empty();
@@ -69,10 +69,10 @@ class S3ObjList
     std::string GetNormalizedName(const char* name) const;
     std::string GetETag(const char* name) const;
     bool IsDir(const char* name) const;
-    bool GetNameList(s3obj_list_t& list, bool OnlyNormalized = true, bool CutSlash = true) const;
+    bool GetNameList(ossobj_list_t& list, bool OnlyNormalized = true, bool CutSlash = true) const;
     bool GetLastName(std::string& lastname) const;
 
-    static bool MakeHierarchizedList(s3obj_list_t& list, bool haveSlash);
+    static bool MakeHierarchizedList(ossobj_list_t& list, bool haveSlash);
 };
 
 typedef struct mvnode {
@@ -138,7 +138,7 @@ void show_usage(void);
 void show_help(void);
 void show_version(void);
 
-#endif // S3FS_S3FS_UTIL_H_
+#endif // OSSFS_OSSFS_UTIL_H_
 
 /*
 * Local variables:

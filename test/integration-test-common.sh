@@ -1,22 +1,22 @@
 #!/bin/bash
 
 #
-# Common code for starting an s3fs-fuse mountpoint and an S3Proxy instance 
+# Common code for starting an ossfs-fuse mountpoint and an S3Proxy instance 
 # to run tests against S3Proxy locally.
 #
-# To run against an Amazon S3 or other S3 provider, specify the following 
+# To run against an InspurCloud OSS or other OSS provider, specify the following 
 # environment variables:
 #
-# S3FS_CREDENTIALS_FILE=keyfile      s3fs format key file
+# OSSFS_CREDENTIALS_FILE=keyfile      ossfs format key file
 # TEST_BUCKET_1=bucketname           Name of bucket to use 
 # S3PROXY_BINARY=""                  Specify empty string to skip S3Proxy start
-# S3_URL="http://s3.amazonaws.com"   Specify Amazon AWS as the S3 provider 
+# OSS_URL="http://oss.cn-north-3.inspurcloudoss.com"   Specify InspurCloud OSS as the OSS provider 
 #
-# Example of running against Amazon S3 using a bucket named "bucket:
+# Example of running against InspurCloud OSS using a bucket named "bucket:
 #
-# S3FS_CREDENTIALS_FILE=keyfile TEST_BUCKET_1=bucket S3PROXY_BINARY="" S3_URL="http://s3.amazonaws.com" ./small-integration-test.sh
+# OSSFS_CREDENTIALS_FILE=keyfile TEST_BUCKET_1=bucket S3PROXY_BINARY="" OSS_URL="http://oss.cn-north-3.inspurcloudoss.com" ./small-integration-test.sh
 #
-# To change the s3fs-fuse debug level:
+# To change the ossfs-fuse debug level:
 #
 #    DBGLEVEL=debug ./small-integration-test.sh
 # 
@@ -27,9 +27,9 @@
 #
 # Run all of the tests from the makefile
 #
-#    S3FS_CREDENTIALS_FILE=keyfile TEST_BUCKET_1=bucket S3PROXY_BINARY="" S3_URL="http://s3.amazonaws.com" make check
+#    OSSFS_CREDENTIALS_FILE=keyfile TEST_BUCKET_1=bucket S3PROXY_BINARY="" OSS_URL="http://oss.cn-north-3.inspurcloudoss.com" make check
 #
-# Run the tests with request auth turned off in both S3Proxy and s3fs-fuse.  This can be
+# Run the tests with request auth turned off in both S3Proxy and ossfs-fuse.  This can be
 # useful for poking around with plain old curl
 #
 #    PUBLIC=1 INTERACT=1 ./small-integration-test.sh 
@@ -38,27 +38,27 @@
 # eg: VALGRIND="--tool=memcheck --leak-check=full" ./small-integration-test.sh
 
 set -o errexit
-S3FS=../src/s3fs
+OSSFS=../src/ossfs
 
 # Allow these defaulted values to be overridden
-: ${S3_URL:="https://127.0.0.1:8080"}
-: ${S3FS_CREDENTIALS_FILE:="passwd-s3fs"}
-: ${TEST_BUCKET_1:="s3fs-integration-test"}
+: ${OSS_URL:="https://127.0.0.1:8080"}
+: ${OSSFS_CREDENTIALS_FILE:="passwd-ossfs"}
+: ${TEST_BUCKET_1:="ossfs-integration-test"}
 
 export TEST_BUCKET_1
-export S3_URL
+export OSS_URL
 export TEST_SCRIPT_DIR=`pwd`
 export TEST_BUCKET_MOUNT_POINT_1=${TEST_BUCKET_1}
 
 S3PROXY_VERSION="1.6.1"
 S3PROXY_BINARY=${S3PROXY_BINARY-"s3proxy-${S3PROXY_VERSION}"}
 
-if [ ! -f "$S3FS_CREDENTIALS_FILE" ]
+if [ ! -f "$OSSFS_CREDENTIALS_FILE" ]
 then
-	echo "Missing credentials file: $S3FS_CREDENTIALS_FILE"
+	echo "Missing credentials file: $OSSFS_CREDENTIALS_FILE"
 	exit 1
 fi
-chmod 600 "$S3FS_CREDENTIALS_FILE"
+chmod 600 "$OSSFS_CREDENTIALS_FILE"
 
 if [ ! -d $TEST_BUCKET_MOUNT_POINT_1 ]
 then
@@ -132,15 +132,15 @@ function stop_s3proxy {
     fi
 }
 
-# Mount the bucket, function arguments passed to s3fs in addition to
+# Mount the bucket, function arguments passed to ossfs in addition to
 # a set of common arguments.  
-function start_s3fs {
+function start_ossfs {
 
     # Public bucket if PUBLIC is set
     if [ -n "${PUBLIC}" ]; then
         AUTH_OPT="-o public_bucket=1"
     else
-        AUTH_OPT="-o passwd_file=${S3FS_CREDENTIALS_FILE}"
+        AUTH_OPT="-o passwd_file=${OSSFS_CREDENTIALS_FILE}"
     fi
 
     # If VALGRIND is set, pass it as options to valgrind.
@@ -151,34 +151,34 @@ function start_s3fs {
         VALGRIND_EXEC="valgrind ${VALGRIND} --log-socket=127.0.1.1"
     fi
 
-    # Common s3fs options:
+    # Common ossfs options:
     #
     # TODO: Allow all these options to be overridden with env variables
     #
     # use_path_request_style
     #     The test env doesn't have virtual hosts
     # createbucket
-    #     S3Proxy always starts with no buckets, this tests the s3fs-fuse
+    #     S3Proxy always starts with no buckets, this tests the ossfs-fuse
     #     automatic bucket creation path.
     # $AUTH_OPT
     #     Will be either "-o public_bucket=1" 
     #                     or 
-    #     "-o passwd_file=${S3FS_CREDENTIALS_FILE}"
+    #     "-o passwd_file=${OSSFS_CREDENTIALS_FILE}"
     # dbglevel
     #     error by default.  override with DBGLEVEL env variable
     # -f
-    #     Keep s3fs in foreground instead of daemonizing
+    #     Keep ossfs in foreground instead of daemonizing
     #
 
-    # subshell with set -x to log exact invocation of s3fs-fuse
+    # subshell with set -x to log exact invocation of ossfs-fuse
     (
         set -x 
         stdbuf -oL -eL \
-            ${VALGRIND_EXEC} ${S3FS} \
+            ${VALGRIND_EXEC} ${OSSFS} \
             $TEST_BUCKET_1 \
             $TEST_BUCKET_MOUNT_POINT_1 \
             -o use_path_request_style \
-            -o url=${S3_URL} \
+            -o url=${OSS_URL} \
             -o no_check_certificate \
             -o ssl_verify_hostname=0 \
             -o use_xattr=1 \
@@ -187,7 +187,7 @@ function start_s3fs {
             -o dbglevel=${DBGLEVEL:=info} \
             -o retries=3 \
             -f \
-            ${@} | stdbuf -oL -eL sed -u "s/^/s3fs: /" &
+            ${@} | stdbuf -oL -eL sed -u "s/^/ossfs: /" &
     )
 
     if [ `uname` = "Darwin" ]; then
@@ -218,7 +218,7 @@ function start_s3fs {
     fi
 }
 
-function stop_s3fs {
+function stop_ossfs {
     # Retry in case file system is in use
     if [ `uname` = "Darwin" ]; then
         df | grep -q $TEST_BUCKET_MOUNT_POINT_1
@@ -234,7 +234,7 @@ function stop_s3fs {
 
 # trap handlers do not stack.  If a test sets its own, the new handler should call common_exit_handler
 function common_exit_handler {
-    stop_s3fs
+    stop_ossfs
     stop_s3proxy
 }
 trap common_exit_handler EXIT

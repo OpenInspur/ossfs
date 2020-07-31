@@ -1,5 +1,5 @@
 /*
- * s3fs - FUSE-based file system backed by Amazon S3
+ * ossfs - FUSE-based file system backed by InspurCloud OSS
  *
  * Copyright(C) 2007 Randy Rizun <rrizun@gmail.com>
  *
@@ -18,8 +18,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 
-#ifndef S3FS_ADDHEAD_H_
-#define S3FS_ADDHEAD_H_
+#ifndef OSSFS_ADDHEAD_H_
+#define OSSFS_ADDHEAD_H_
 
 #include <regex.h>
 
@@ -58,7 +58,7 @@ class AdditionalHeader
     bool Dump(void) const;
 };
 
-#endif // S3FS_ADDHEAD_H_
+#endif // OSSFS_ADDHEAD_H_
 
 /*
 * Local variables:

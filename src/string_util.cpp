@@ -1,5 +1,5 @@
 /*
- * s3fs - FUSE-based file system backed by Amazon S3
+ * ossfs - FUSE-based file system backed by InspurCloud OSS
  *
  * Copyright(C) 2007 Randy Rizun <rrizun@gmail.com>
  *
@@ -50,7 +50,7 @@ template std::string str(unsigned long long value);
 
 static const char hexAlphabet[] = "0123456789ABCDEF";
 
-off_t s3fs_strtoofft(const char* str, bool is_base_16)
+off_t ossfs_strtoofft(const char* str, bool is_base_16)
 {
   if(!str || '\0' == *str){
     return 0;
@@ -163,7 +163,7 @@ string urlEncode2(const string &s)
   for (unsigned i = 0; i < s.length(); ++i) {
     char c = s[i];
     if (c == '=' // Note- special case for fuse paths...
-      || c == '&' // Note- special case for s3...
+      || c == '&' // Note- special case for oss...
       || c == '%'
       || c == '.'
       || c == '-'
@@ -353,7 +353,7 @@ bool convert_unixtime_from_option_arg(const char* argv, time_t& unixtime)
   return true;
 }
 
-std::string s3fs_hex(const unsigned char* input, size_t length)
+std::string ossfs_hex(const unsigned char* input, size_t length)
 {
   std::string hex;
   for(size_t pos = 0; pos < length; ++pos){
@@ -364,7 +364,7 @@ std::string s3fs_hex(const unsigned char* input, size_t length)
   return hex;
 }
 
-char* s3fs_base64(const unsigned char* input, size_t length)
+char* ossfs_base64(const unsigned char* input, size_t length)
 {
   static const char* base = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
   char* result;
@@ -416,7 +416,7 @@ inline unsigned char char_decode64(const char ch)
   return by;
 }
 
-unsigned char* s3fs_decode64(const char* input, size_t* plength)
+unsigned char* ossfs_decode64(const char* input, size_t* plength)
 {
   unsigned char* result;
   if(!input || 0 == strlen(input) || !plength){
@@ -455,7 +455,7 @@ unsigned char* s3fs_decode64(const char* input, size_t* plength)
  * detect and rewrite invalid utf8.  We take invalid bytes
  * and encode them into a private region of the unicode
  * space.  This is sometimes known as wtf8, wobbly transformation format.
- * it is necessary because S3 validates the utf8 used for identifiers for
+ * it is necessary because OSS validates the utf8 used for identifiers for
  * correctness, while some clients may provide invalid utf, notably
  * windows using cp1252.
  */
@@ -466,7 +466,7 @@ static unsigned int escape_base = 0xe000;
 
 // encode bytes into wobbly utf8.  
 // 'result' can be null. returns true if transform was needed.
-bool s3fs_wtf8_encode(const char *s, string *result)
+bool ossfs_wtf8_encode(const char *s, string *result)
 {
   bool invalid = false;
 
@@ -536,16 +536,16 @@ bool s3fs_wtf8_encode(const char *s, string *result)
   return invalid;
 }
 
-string s3fs_wtf8_encode(const string &s)
+string ossfs_wtf8_encode(const string &s)
 {
   string result;
-  s3fs_wtf8_encode(s.c_str(), &result);
+  ossfs_wtf8_encode(s.c_str(), &result);
   return result;
 }
 
 // The reverse operation, turn encoded bytes back into their original values
 // The code assumes that we map to a three-byte code point.
-bool s3fs_wtf8_decode(const char *s, string *result)
+bool ossfs_wtf8_decode(const char *s, string *result)
 {
   bool encoded = false;
   for (; *s; s++) {
@@ -570,10 +570,10 @@ bool s3fs_wtf8_decode(const char *s, string *result)
   return encoded;
 }
  
-string s3fs_wtf8_decode(const string &s)
+string ossfs_wtf8_decode(const string &s)
 {
   string result;
-  s3fs_wtf8_decode(s.c_str(), &result);
+  ossfs_wtf8_decode(s.c_str(), &result);
   return result;
 }
 

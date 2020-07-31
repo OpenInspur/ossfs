@@ -1,5 +1,5 @@
 /*
- * s3fs - FUSE-based file system backed by Amazon S3
+ * ossfs - FUSE-based file system backed by InspurCloud OSS
  *
  * Copyright(C) 2007 Randy Rizun <rrizun@gmail.com>
  *
@@ -44,13 +44,13 @@
 #include <list>
 
 #include "common.h"
-#include "s3fs.h"
+#include "ossfs.h"
 #include "curl.h"
 #include "cache.h"
 #include "string_util.h"
-#include "s3fs_util.h"
+#include "ossfs_util.h"
 #include "fdcache.h"
-#include "s3fs_auth.h"
+#include "ossfs_auth.h"
 #include "addhead.h"
 
 using namespace std;
@@ -105,14 +105,14 @@ bool pathrequeststyle             = false;
 bool complement_stat              = false;
 std::string program_name;
 std::string service_path          = "/";
-std::string host                  = "https://s3.amazonaws.com";
+std::string host                  = "https://oss.cn-north-3.inspurcloudoss.com";
 std::string bucket;
-std::string endpoint              = "us-east-1";
+std::string endpoint              = "cn-north-3";
 std::string cipher_suites;
 std::string instance_name;
-s3fs_log_level debug_level        = S3FS_LOG_CRIT;
-const char*    s3fs_log_nest[S3FS_LOG_NEST_MAX] = {"", "  ", "    ", "      "};
-std::string aws_profile           = "default";
+ossfs_log_level debug_level        = OSSFS_LOG_CRIT;
+const char*    ossfs_log_nest[OSSFS_LOG_NEST_MAX] = {"", "  ", "    ", "      "};
+std::string oss_profile           = "default";
 
 //-------------------------------------------------------------------
 // Static variables
@@ -131,12 +131,12 @@ static bool norenameapi           = false;
 static bool nonempty              = false;
 static bool allow_other           = false;
 static bool load_iamrole          = false;
-static uid_t s3fs_uid             = 0;
-static gid_t s3fs_gid             = 0;
-static mode_t s3fs_umask          = 0;
-static bool is_s3fs_uid           = false;// default does not set.
-static bool is_s3fs_gid           = false;// default does not set.
-static bool is_s3fs_umask         = false;// default does not set.
+static uid_t ossfs_uid             = 0;
+static gid_t ossfs_gid             = 0;
+static mode_t ossfs_umask          = 0;
+static bool is_ossfs_uid           = false;// default does not set.
+static bool is_ossfs_gid           = false;// default does not set.
+static bool is_ossfs_umask         = false;// default does not set.
 static bool is_remove_cache       = false;
 static bool is_ecs                = false;
 static bool is_ibm_iam_auth       = false;
@@ -144,23 +144,23 @@ static bool is_use_xattr          = false;
 static bool create_bucket         = false;
 static int64_t singlepart_copy_limit = 512 * 1024 * 1024;
 static bool is_specified_endpoint = false;
-static int s3fs_init_deferred_exit_status = 0;
+static int ossfs_init_deferred_exit_status = 0;
 static bool support_compat_dir    = true;// default supports compatibility directory type
 static int max_keys_list_object   = 1000;// default is 1000
 static bool use_wtf8              = false;
 
 static const std::string allbucket_fields_type;              // special key for mapping(This name is absolutely not used as a bucket name)
 static const std::string keyval_fields_type    = "\t";       // special key for mapping(This name is absolutely not used as a bucket name)
-static const std::string aws_accesskeyid       = "AWSAccessKeyId";
-static const std::string aws_secretkey         = "AWSSecretKey";
+static const std::string oss_accesskeyid       = "OSSAccessKeyId";
+static const std::string oss_secretkey         = "OSSSecretKey";
 
 //-------------------------------------------------------------------
 // Static functions : prototype
 //-------------------------------------------------------------------
-static void s3fs_usr2_handler(int sig);
-static bool set_s3fs_usr2_handler();
-static s3fs_log_level set_s3fs_log_level(s3fs_log_level level);
-static s3fs_log_level bumpup_s3fs_log_level();
+static void ossfs_usr2_handler(int sig);
+static bool set_ossfs_usr2_handler();
+static ossfs_log_level set_ossfs_log_level(ossfs_log_level level);
+static ossfs_log_level bumpup_ossfs_log_level();
 static bool is_special_name_folder_object(const char* path);
 static int chk_dir_object_type(const char* path, string& newpath, string& nowpath, string& nowcache, headers_t* pmeta = NULL, dirtype* pDirType = NULL);
 static int remove_old_type_dir(const string& path, dirtype type);
@@ -169,15 +169,15 @@ static int check_object_access(const char* path, int mask, struct stat* pstbuf);
 static int check_object_owner(const char* path, struct stat* pstbuf);
 static int check_parent_object_access(const char* path, int mask);
 static FdEntity* get_local_fent(const char* path, bool is_load = false);
-static bool multi_head_callback(S3fsCurl* s3fscurl);
-static S3fsCurl* multi_head_retry_callback(S3fsCurl* s3fscurl);
-static int readdir_multi_head(const char* path, S3ObjList& head, void* buf, fuse_fill_dir_t filler);
-static int list_bucket(const char* path, S3ObjList& head, const char* delimiter, bool check_content_only = false);
+static bool multi_head_callback(OSSfsCurl* ossfscurl);
+static OSSfsCurl* multi_head_retry_callback(OSSfsCurl* ossfscurl);
+static int readdir_multi_head(const char* path, OSSObjList& head, void* buf, fuse_fill_dir_t filler);
+static int list_bucket(const char* path, OSSObjList& head, const char* delimiter, bool check_content_only = false);
 static int directory_empty(const char* path);
 static bool is_truncated(xmlDocPtr doc);
 static int append_objects_from_xml_ex(const char* path, xmlDocPtr doc, xmlXPathContextPtr ctx, 
-              const char* ex_contents, const char* ex_key, const char* ex_etag, int isCPrefix, S3ObjList& head);
-static int append_objects_from_xml(const char* path, xmlDocPtr doc, S3ObjList& head);
+              const char* ex_contents, const char* ex_key, const char* ex_etag, int isCPrefix, OSSObjList& head);
+static int append_objects_from_xml(const char* path, xmlDocPtr doc, OSSObjList& head);
 static bool GetXmlNsUrl(xmlDocPtr doc, string& nsurl);
 static xmlChar* get_base_exp(xmlDocPtr doc, const char* exp);
 static xmlChar* get_prefix(xmlDocPtr doc);
@@ -200,12 +200,12 @@ static void free_xattrs(xattrs_t& xattrs);
 static bool parse_xattr_keyval(const std::string& xattrpair, string& key, PXATTRVAL& pval);
 static size_t parse_xattrs(const std::string& strxattrs, xattrs_t& xattrs);
 static std::string build_xattrs(const xattrs_t& xattrs);
-static int s3fs_utility_processing(time_t abort_time);
-static int s3fs_check_service();
+static int ossfs_utility_processing(time_t abort_time);
+static int ossfs_check_service();
 static int parse_passwd_file(bucketkvmap_t& resmap);
-static int check_for_aws_format(const kvmap_t& kvmap);
+static int check_for_oss_format(const kvmap_t& kvmap);
 static int check_passwd_file_perms();
-static int read_aws_credentials_file(const std::string &filename);
+static int read_oss_credentials_file(const std::string &filename);
 static int read_passwd_file();
 static int get_access_keys();
 static int set_mountpoint_attribute(struct stat& mpst);
@@ -213,44 +213,44 @@ static int set_bucket(const char* arg);
 static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_args* outargs);
 
 // fuse interface functions
-static int s3fs_getattr(const char* path, struct stat* stbuf);
-static int s3fs_readlink(const char* path, char* buf, size_t size);
-static int s3fs_mknod(const char* path, mode_t mode, dev_t rdev);
-static int s3fs_mkdir(const char* path, mode_t mode);
-static int s3fs_unlink(const char* path);
-static int s3fs_rmdir(const char* path);
-static int s3fs_symlink(const char* from, const char* to);
-static int s3fs_rename(const char* from, const char* to);
-static int s3fs_link(const char* from, const char* to);
-static int s3fs_chmod(const char* path, mode_t mode);
-static int s3fs_chmod_nocopy(const char* path, mode_t mode);
-static int s3fs_chown(const char* path, uid_t uid, gid_t gid);
-static int s3fs_chown_nocopy(const char* path, uid_t uid, gid_t gid);
-static int s3fs_utimens(const char* path, const struct timespec ts[2]);
-static int s3fs_utimens_nocopy(const char* path, const struct timespec ts[2]);
-static int s3fs_truncate(const char* path, off_t size);
-static int s3fs_create(const char* path, mode_t mode, struct fuse_file_info* fi);
-static int s3fs_open(const char* path, struct fuse_file_info* fi);
-static int s3fs_read(const char* path, char* buf, size_t size, off_t offset, struct fuse_file_info* fi);
-static int s3fs_write(const char* path, const char* buf, size_t size, off_t offset, struct fuse_file_info* fi);
-static int s3fs_statfs(const char* path, struct statvfs* stbuf);
-static int s3fs_flush(const char* path, struct fuse_file_info* fi);
-static int s3fs_fsync(const char* path, int datasync, struct fuse_file_info* fi);
-static int s3fs_release(const char* path, struct fuse_file_info* fi);
-static int s3fs_opendir(const char* path, struct fuse_file_info* fi);
-static int s3fs_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi);
-static int s3fs_access(const char* path, int mask);
-static void* s3fs_init(struct fuse_conn_info* conn);
-static void s3fs_destroy(void*);
+static int ossfs_getattr(const char* path, struct stat* stbuf);
+static int ossfs_readlink(const char* path, char* buf, size_t size);
+static int ossfs_mknod(const char* path, mode_t mode, dev_t rdev);
+static int ossfs_mkdir(const char* path, mode_t mode);
+static int ossfs_unlink(const char* path);
+static int ossfs_rmdir(const char* path);
+static int ossfs_symlink(const char* from, const char* to);
+static int ossfs_rename(const char* from, const char* to);
+static int ossfs_link(const char* from, const char* to);
+static int ossfs_chmod(const char* path, mode_t mode);
+static int ossfs_chmod_nocopy(const char* path, mode_t mode);
+static int ossfs_chown(const char* path, uid_t uid, gid_t gid);
+static int ossfs_chown_nocopy(const char* path, uid_t uid, gid_t gid);
+static int ossfs_utimens(const char* path, const struct timespec ts[2]);
+static int ossfs_utimens_nocopy(const char* path, const struct timespec ts[2]);
+static int ossfs_truncate(const char* path, off_t size);
+static int ossfs_create(const char* path, mode_t mode, struct fuse_file_info* fi);
+static int ossfs_open(const char* path, struct fuse_file_info* fi);
+static int ossfs_read(const char* path, char* buf, size_t size, off_t offset, struct fuse_file_info* fi);
+static int ossfs_write(const char* path, const char* buf, size_t size, off_t offset, struct fuse_file_info* fi);
+static int ossfs_statfs(const char* path, struct statvfs* stbuf);
+static int ossfs_flush(const char* path, struct fuse_file_info* fi);
+static int ossfs_fsync(const char* path, int datasync, struct fuse_file_info* fi);
+static int ossfs_release(const char* path, struct fuse_file_info* fi);
+static int ossfs_opendir(const char* path, struct fuse_file_info* fi);
+static int ossfs_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi);
+static int ossfs_access(const char* path, int mask);
+static void* ossfs_init(struct fuse_conn_info* conn);
+static void ossfs_destroy(void*);
 #if defined(__APPLE__)
-static int s3fs_setxattr(const char* path, const char* name, const char* value, size_t size, int flags, uint32_t position);
-static int s3fs_getxattr(const char* path, const char* name, char* value, size_t size, uint32_t position);
+static int ossfs_setxattr(const char* path, const char* name, const char* value, size_t size, int flags, uint32_t position);
+static int ossfs_getxattr(const char* path, const char* name, char* value, size_t size, uint32_t position);
 #else
-static int s3fs_setxattr(const char* path, const char* name, const char* value, size_t size, int flags);
-static int s3fs_getxattr(const char* path, const char* name, char* value, size_t size);
+static int ossfs_setxattr(const char* path, const char* name, const char* value, size_t size, int flags);
+static int ossfs_getxattr(const char* path, const char* name, char* value, size_t size);
 #endif
-static int s3fs_listxattr(const char* path, char* list, size_t size);
-static int s3fs_removexattr(const char* path, const char* name);
+static int ossfs_listxattr(const char* path, char* list, size_t size);
+static int ossfs_removexattr(const char* path, const char* name);
 
 //-------------------------------------------------------------------
 // WTF8 macros
@@ -258,26 +258,26 @@ static int s3fs_removexattr(const char* path, const char* name);
 #define WTF8_ENCODE(ARG)  \
   std::string ARG##_buf; \
   const char * ARG = _##ARG; \
-  if (use_wtf8 && s3fs_wtf8_encode( _##ARG, 0 )) { \
-    s3fs_wtf8_encode( _##ARG, &ARG##_buf); \
+  if (use_wtf8 && ossfs_wtf8_encode( _##ARG, 0 )) { \
+    ossfs_wtf8_encode( _##ARG, &ARG##_buf); \
     ARG = ARG##_buf.c_str(); \
   }
 
 //-------------------------------------------------------------------
 // Functions
 //-------------------------------------------------------------------
-static void s3fs_usr2_handler(int sig)
+static void ossfs_usr2_handler(int sig)
 {
   if(SIGUSR2 == sig){
-    bumpup_s3fs_log_level();
+    bumpup_ossfs_log_level();
   }
 }
-static bool set_s3fs_usr2_handler()
+static bool set_ossfs_usr2_handler()
 {
   struct sigaction sa;
 
   memset(&sa, 0, sizeof(struct sigaction));
-  sa.sa_handler = s3fs_usr2_handler;
+  sa.sa_handler = ossfs_usr2_handler;
   sa.sa_flags   = SA_RESTART;
   if(0 != sigaction(SIGUSR2, &sa, NULL)){
     return false;
@@ -285,35 +285,35 @@ static bool set_s3fs_usr2_handler()
   return true;
 }
 
-static s3fs_log_level set_s3fs_log_level(s3fs_log_level level)
+static ossfs_log_level set_ossfs_log_level(ossfs_log_level level)
 {
   if(level == debug_level){
     return debug_level;
   }
-  s3fs_log_level old = debug_level;
+  ossfs_log_level old = debug_level;
   debug_level        = level;
-  setlogmask(LOG_UPTO(S3FS_LOG_LEVEL_TO_SYSLOG(debug_level)));
-  S3FS_PRN_CRIT("change debug level from %sto %s", S3FS_LOG_LEVEL_STRING(old), S3FS_LOG_LEVEL_STRING(debug_level));
+  setlogmask(LOG_UPTO(OSSFS_LOG_LEVEL_TO_SYSLOG(debug_level)));
+  OSSFS_PRN_CRIT("change debug level from %sto %s", OSSFS_LOG_LEVEL_STRING(old), OSSFS_LOG_LEVEL_STRING(debug_level));
   return old;
 }
 
-static s3fs_log_level bumpup_s3fs_log_level()
+static ossfs_log_level bumpup_ossfs_log_level()
 {
-  s3fs_log_level old = debug_level;
-  debug_level        = ( S3FS_LOG_CRIT == debug_level ? S3FS_LOG_ERR :
-                         S3FS_LOG_ERR  == debug_level ? S3FS_LOG_WARN :
-                         S3FS_LOG_WARN == debug_level ? S3FS_LOG_INFO :
-                         S3FS_LOG_INFO == debug_level ? S3FS_LOG_DBG :
-                         S3FS_LOG_CRIT );
-  setlogmask(LOG_UPTO(S3FS_LOG_LEVEL_TO_SYSLOG(debug_level)));
-  S3FS_PRN_CRIT("change debug level from %sto %s", S3FS_LOG_LEVEL_STRING(old), S3FS_LOG_LEVEL_STRING(debug_level));
+  ossfs_log_level old = debug_level;
+  debug_level        = ( OSSFS_LOG_CRIT == debug_level ? OSSFS_LOG_ERR :
+                         OSSFS_LOG_ERR  == debug_level ? OSSFS_LOG_WARN :
+                         OSSFS_LOG_WARN == debug_level ? OSSFS_LOG_INFO :
+                         OSSFS_LOG_INFO == debug_level ? OSSFS_LOG_DBG :
+                         OSSFS_LOG_CRIT );
+  setlogmask(LOG_UPTO(OSSFS_LOG_LEVEL_TO_SYSLOG(debug_level)));
+  OSSFS_PRN_CRIT("change debug level from %sto %s", OSSFS_LOG_LEVEL_STRING(old), OSSFS_LOG_LEVEL_STRING(debug_level));
   return old;
 }
 
 static bool is_special_name_folder_object(const char* path)
 {
   if(!support_compat_dir){
-    // s3fs does not support compatibility directory type("_$folder$" etc) now,
+    // ossfs does not support compatibility directory type("_$folder$" etc) now,
     // thus always returns false.
     return false;
   }
@@ -331,12 +331,12 @@ static bool is_special_name_folder_object(const char* path)
     }
     strpath += "_$folder$";
   }
-  S3fsCurl s3fscurl;
-  if(0 != s3fscurl.HeadRequest(strpath.c_str(), header)){
+  OSSfsCurl ossfscurl;
+  if(0 != ossfscurl.HeadRequest(strpath.c_str(), header)){
     return false;
   }
   header.clear();
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
   return true;
 }
 
@@ -433,8 +433,8 @@ static int chk_dir_object_type(const char* path, string& newpath, string& nowpat
 static int remove_old_type_dir(const string& path, dirtype type)
 {
   if(IS_RMTYPEDIR(type)){
-    S3fsCurl s3fscurl;
-    int      result = s3fscurl.DeleteRequest(path.c_str());
+    OSSfsCurl ossfscurl;
+    int      result = ossfscurl.DeleteRequest(path.c_str());
     if(0 != result && -ENOENT != result){
       return result;
     }
@@ -447,7 +447,7 @@ static int remove_old_type_dir(const string& path, dirtype type)
 
 //
 // Get object attributes with stat cache.
-// This function is base for s3fs_getattr().
+// This function is base for ossfs_getattr().
 //
 // [NOTICE]
 // Checking order is changed following list because of reducing the number of the requests.
@@ -463,11 +463,11 @@ static int get_object_attribute(const char* path, struct stat* pstbuf, headers_t
   headers_t    tmpHead;
   headers_t*   pheader = pmeta ? pmeta : &tmpHead;
   string       strpath;
-  S3fsCurl     s3fscurl;
+  OSSfsCurl     ossfscurl;
   bool         forcedir = false;
   string::size_type Pos;
 
-  S3FS_PRN_DBG("[path=%s]", path);
+  OSSFS_PRN_DBG("[path=%s]", path);
 
   if(!path || '\0' == path[0]){
     return -ENOENT;
@@ -477,8 +477,8 @@ static int get_object_attribute(const char* path, struct stat* pstbuf, headers_t
   if(0 == strcmp(path, "/") || 0 == strcmp(path, ".")){
     pstat->st_nlink = 1; // see fuse faq
     pstat->st_mode  = mp_mode;
-    pstat->st_uid   = is_s3fs_uid ? s3fs_uid : mp_uid;
-    pstat->st_gid   = is_s3fs_gid ? s3fs_gid : mp_gid;
+    pstat->st_uid   = is_ossfs_uid ? ossfs_uid : mp_uid;
+    pstat->st_gid   = is_ossfs_gid ? ossfs_gid : mp_gid;
     return 0;
   }
 
@@ -501,8 +501,8 @@ static int get_object_attribute(const char* path, struct stat* pstbuf, headers_t
 
   // At first, check path
   strpath     = path;
-  result      = s3fscurl.HeadRequest(strpath.c_str(), (*pheader));
-  s3fscurl.DestroyCurlHandle();
+  result      = ossfscurl.HeadRequest(strpath.c_str(), (*pheader));
+  ossfscurl.DestroyCurlHandle();
 
   // if not found target path object, do over checking
   if(0 != result){
@@ -511,15 +511,15 @@ static int get_object_attribute(const char* path, struct stat* pstbuf, headers_t
       if('/' != strpath[strpath.length() - 1] && string::npos == strpath.find("_$folder$", 0)){
         // now path is "object", do check "object/" for over checking
         strpath    += "/";
-        result      = s3fscurl.HeadRequest(strpath.c_str(), (*pheader));
-        s3fscurl.DestroyCurlHandle();
+        result      = ossfscurl.HeadRequest(strpath.c_str(), (*pheader));
+        ossfscurl.DestroyCurlHandle();
       }
       if(support_compat_dir && 0 != result){
         // now path is "object/", do check "object_$folder$" for over checking
         strpath     = strpath.substr(0, strpath.length() - 1);
         strpath    += "_$folder$";
-        result      = s3fscurl.HeadRequest(strpath.c_str(), (*pheader));
-        s3fscurl.DestroyCurlHandle();
+        result      = ossfscurl.HeadRequest(strpath.c_str(), (*pheader));
+        ossfscurl.DestroyCurlHandle();
 
         if(0 != result){
           // cut "_$folder$" for over checking "no dir object" after here
@@ -577,20 +577,20 @@ static int get_object_attribute(const char* path, struct stat* pstbuf, headers_t
   if(add_no_truncate_cache || 0 != StatCache::getStatCacheData()->GetCacheSize()){
     // add into stat cache
     if(!StatCache::getStatCacheData()->AddStat(strpath, (*pheader), forcedir, add_no_truncate_cache)){
-      S3FS_PRN_ERR("failed adding stat cache [path=%s]", strpath.c_str());
+      OSSFS_PRN_ERR("failed adding stat cache [path=%s]", strpath.c_str());
       return -ENOENT;
     }
     if(!StatCache::getStatCacheData()->GetStat(strpath, pstat, pheader, overcheck, pisforce)){
       // There is not in cache.(why?) -> retry to convert.
       if(!convert_header_to_stat(strpath.c_str(), (*pheader), pstat, forcedir)){
-        S3FS_PRN_ERR("failed convert headers to stat[path=%s]", strpath.c_str());
+        OSSFS_PRN_ERR("failed convert headers to stat[path=%s]", strpath.c_str());
         return -ENOENT;
       }
     }
   }else{
     // cache size is Zero -> only convert.
     if(!convert_header_to_stat(strpath.c_str(), (*pheader), pstat, forcedir)){
-      S3FS_PRN_ERR("failed convert headers to stat[path=%s]", strpath.c_str());
+      OSSFS_PRN_ERR("failed convert headers to stat[path=%s]", strpath.c_str());
       return -ENOENT;
     }
   }
@@ -614,7 +614,7 @@ static int check_object_access(const char* path, int mask, struct stat* pstbuf)
   struct stat* pst = (pstbuf ? pstbuf : &st);
   struct fuse_context* pcxt;
 
-  S3FS_PRN_DBG("[path=%s]", path);
+  OSSFS_PRN_DBG("[path=%s]", path);
 
   if(NULL == (pcxt = fuse_get_context())){
     return -EIO;
@@ -627,7 +627,7 @@ static int check_object_access(const char* path, int mask, struct stat* pstbuf)
     // root is allowed all accessing.
     return 0;
   }
-  if(is_s3fs_uid && s3fs_uid == pcxt->uid){
+  if(is_ossfs_uid && ossfs_uid == pcxt->uid){
     // "uid" user is allowed all accessing.
     return 0;
   }
@@ -637,15 +637,15 @@ static int check_object_access(const char* path, int mask, struct stat* pstbuf)
   }
 
   // for "uid", "gid" option
-  uid_t  obj_uid = (is_s3fs_uid ? s3fs_uid : pst->st_uid);
-  gid_t  obj_gid = (is_s3fs_gid ? s3fs_gid : pst->st_gid);
+  uid_t  obj_uid = (is_ossfs_uid ? ossfs_uid : pst->st_uid);
+  gid_t  obj_gid = (is_ossfs_gid ? ossfs_gid : pst->st_gid);
 
   // compare file mode and uid/gid + mask.
   mode_t mode;
   mode_t base_mask = S_IRWXO;
-  if(is_s3fs_umask){
+  if(is_ossfs_umask){
     // If umask is set, all object attributes set ~umask.
-    mode = ((S_IRWXU | S_IRWXG | S_IRWXO) & ~s3fs_umask);
+    mode = ((S_IRWXU | S_IRWXG | S_IRWXO) & ~ossfs_umask);
   }else{
     mode = pst->st_mode;
   }
@@ -688,7 +688,7 @@ static int check_object_owner(const char* path, struct stat* pstbuf)
   struct stat* pst = (pstbuf ? pstbuf : &st);
   struct fuse_context* pcxt;
 
-  S3FS_PRN_DBG("[path=%s]", path);
+  OSSFS_PRN_DBG("[path=%s]", path);
 
   if(NULL == (pcxt = fuse_get_context())){
     return -EIO;
@@ -702,7 +702,7 @@ static int check_object_owner(const char* path, struct stat* pstbuf)
     // root is allowed all accessing.
     return 0;
   }
-  if(is_s3fs_uid && s3fs_uid == pcxt->uid){
+  if(is_ossfs_uid && ossfs_uid == pcxt->uid){
     // "uid" user is allowed all accessing.
     return 0;
   }
@@ -720,7 +720,7 @@ static int check_parent_object_access(const char* path, int mask)
   string parent;
   int result;
 
-  S3FS_PRN_DBG("[path=%s]", path);
+  OSSFS_PRN_DBG("[path=%s]", path);
 
   if(0 == strcmp(path, "/") || 0 == strcmp(path, ".")){
     // path is mount point.
@@ -763,7 +763,7 @@ bool get_object_sse_type(const char* path, sse_type_t& ssetype, string& ssevalue
 
   headers_t meta;
   if(0 != get_object_attribute(path, NULL, &meta)){
-    S3FS_PRN_ERR("Failed to get object(%s) headers", path);
+    OSSFS_PRN_ERR("Failed to get object(%s) headers", path);
     return false;
   }
 
@@ -771,12 +771,12 @@ bool get_object_sse_type(const char* path, sse_type_t& ssetype, string& ssevalue
   ssevalue.erase();
   for(headers_t::iterator iter = meta.begin(); iter != meta.end(); ++iter){
     string key = (*iter).first;
-    if(0 == strcasecmp(key.c_str(), "x-amz-server-side-encryption") && 0 == strcasecmp((*iter).second.c_str(), "AES256")){
-      ssetype  = SSE_S3;
-    }else if(0 == strcasecmp(key.c_str(), "x-amz-server-side-encryption-aws-kms-key-id")){
+    if(0 == strcasecmp(key.c_str(), "x-oss-server-side-encryption") && 0 == strcasecmp((*iter).second.c_str(), "AES256")){
+      ssetype  = SSE_OSS;
+    }else if(0 == strcasecmp(key.c_str(), "x-oss-server-side-encryption-oss-kms-key-id")){
       ssetype  = SSE_KMS;
       ssevalue = (*iter).second;
-    }else if(0 == strcasecmp(key.c_str(), "x-amz-server-side-encryption-customer-key-md5")){
+    }else if(0 == strcasecmp(key.c_str(), "x-oss-server-side-encryption-customer-key-md5")){
       ssetype  = SSE_C;
       ssevalue = (*iter).second;
     }
@@ -790,7 +790,7 @@ static FdEntity* get_local_fent(const char* path, bool is_load)
   FdEntity*   ent;
   headers_t   meta;
 
-  S3FS_PRN_INFO2("[path=%s]", path);
+  OSSFS_PRN_INFO2("[path=%s]", path);
 
   if(0 != get_object_attribute(path, &stobj, &meta)){
     return NULL;
@@ -801,12 +801,12 @@ static FdEntity* get_local_fent(const char* path, bool is_load)
   bool   force_tmpfile = S_ISREG(stobj.st_mode) ? false : true;
 
   if(NULL == (ent = FdManager::get()->Open(path, &meta, static_cast<ssize_t>(stobj.st_size), mtime, force_tmpfile, true))){
-    S3FS_PRN_ERR("Could not open file. errno(%d)", errno);
+    OSSFS_PRN_ERR("Could not open file. errno(%d)", errno);
     return NULL;
   }
   // load
   if(is_load && !ent->OpenAndLoadAll(&meta)){
-    S3FS_PRN_ERR("Could not load file. errno(%d)", errno);
+    OSSFS_PRN_ERR("Could not load file. errno(%d)", errno);
     FdManager::get()->Close(ent);
     return NULL;
   }
@@ -814,17 +814,17 @@ static FdEntity* get_local_fent(const char* path, bool is_load)
 }
 
 /**
- * create or update s3 meta
+ * create or update oss meta
  * ow_sse_flg is for over writing sse header by use_sse option.
  * @return fuse return code
  */
 static int put_headers(const char* path, headers_t& meta, bool is_copy)
 {
   int         result;
-  S3fsCurl    s3fscurl(true);
+  OSSfsCurl    ossfscurl(true);
   struct stat buf;
 
-  S3FS_PRN_INFO2("[path=%s]", path);
+  OSSFS_PRN_INFO2("[path=%s]", path);
 
   // files larger than 5GB must be modified via the multipart interface
   // *** If there is not target object(a case of move command),
@@ -833,11 +833,11 @@ static int put_headers(const char* path, headers_t& meta, bool is_copy)
 
   if(buf.st_size >= FIVE_GB){
     // multipart
-    if(0 != (result = s3fscurl.MultipartHeadRequest(path, buf.st_size, meta, is_copy))){
+    if(0 != (result = ossfscurl.MultipartHeadRequest(path, buf.st_size, meta, is_copy))){
       return result;
     }
   }else{
-    if(0 != (result = s3fscurl.PutHeadRequest(path, meta, is_copy))){
+    if(0 != (result = ossfscurl.PutHeadRequest(path, meta, is_copy))){
       return result;
     }
   }
@@ -859,12 +859,12 @@ static int put_headers(const char* path, headers_t& meta, bool is_copy)
   return 0;
 }
 
-static int s3fs_getattr(const char* _path, struct stat* stbuf)
+static int ossfs_getattr(const char* _path, struct stat* stbuf)
 {
   WTF8_ENCODE(path)
   int result;
 
-  S3FS_PRN_INFO("[path=%s]", path);
+  OSSFS_PRN_INFO("[path=%s]", path);
 
   // check parent directory attribute.
   if(0 != (result = check_parent_object_access(path, X_OK))){
@@ -888,13 +888,13 @@ static int s3fs_getattr(const char* _path, struct stat* stbuf)
     stbuf->st_blksize = 4096;
     stbuf->st_blocks  = get_blocks(stbuf->st_size);
   }
-  S3FS_PRN_DBG("[path=%s] uid=%u, gid=%u, mode=%04o", path, (unsigned int)(stbuf->st_uid), (unsigned int)(stbuf->st_gid), stbuf->st_mode);
-  S3FS_MALLOCTRIM(0);
+  OSSFS_PRN_DBG("[path=%s] uid=%u, gid=%u, mode=%04o", path, (unsigned int)(stbuf->st_uid), (unsigned int)(stbuf->st_gid), stbuf->st_mode);
+  OSSFS_MALLOCTRIM(0);
 
   return result;
 }
 
-static int s3fs_readlink(const char* _path, char* buf, size_t size)
+static int ossfs_readlink(const char* _path, char* buf, size_t size)
 {
   if(!_path || !buf || 0 == size){
     return 0;
@@ -903,13 +903,13 @@ static int s3fs_readlink(const char* _path, char* buf, size_t size)
   // Open
   FdEntity*   ent;
   if(NULL == (ent = get_local_fent(path))){
-    S3FS_PRN_ERR("could not get fent(file=%s)", path);
+    OSSFS_PRN_ERR("could not get fent(file=%s)", path);
     return -EIO;
   }
   // Get size
   size_t readsize;
   if(!ent->GetSize(readsize)){
-    S3FS_PRN_ERR("could not get file size(file=%s)", path);
+    OSSFS_PRN_ERR("could not get file size(file=%s)", path);
     FdManager::get()->Close(ent);
     return -EIO;
   }
@@ -919,7 +919,7 @@ static int s3fs_readlink(const char* _path, char* buf, size_t size)
   // Read
   ssize_t ressize;
   if(0 > (ressize = ent->Read(buf, 0, readsize))){
-    S3FS_PRN_ERR("could not read file(file=%s, ressize=%jd)", path, (intmax_t)ressize);
+    OSSFS_PRN_ERR("could not read file(file=%s, ressize=%jd)", path, (intmax_t)ressize);
     FdManager::get()->Close(ent);
     return static_cast<int>(ressize);
   }
@@ -929,22 +929,22 @@ static int s3fs_readlink(const char* _path, char* buf, size_t size)
   string strTmp = trim(string(buf));
   // decode wtf8. This will always be shorter
   if (use_wtf8)
-    strTmp = s3fs_wtf8_decode(strTmp);
+    strTmp = ossfs_wtf8_decode(strTmp);
   strcpy(buf, strTmp.c_str());
 
   FdManager::get()->Close(ent);
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return 0;
 }
 
 static int do_create_bucket()
 {
-  S3FS_PRN_INFO2("/");
+  OSSFS_PRN_INFO2("/");
 
   FILE* ptmpfp;
   int   tmpfd;
-  if(endpoint == "us-east-1"){
+  if(endpoint == "cn-north-3"){
     ptmpfp = NULL;
     tmpfd = -1;
   }else{
@@ -955,7 +955,7 @@ static int do_create_bucket()
         "</CreateBucketConfiguration>", endpoint.c_str()) ||
        0 != fflush(ptmpfp) ||
        -1 == fseek(ptmpfp, 0L, SEEK_SET)){
-      S3FS_PRN_ERR("failed to create temporary file. err(%d)", errno);
+      OSSFS_PRN_ERR("failed to create temporary file. err(%d)", errno);
       if(ptmpfp){
         fclose(ptmpfp);
       }
@@ -965,17 +965,17 @@ static int do_create_bucket()
 
   headers_t meta;
 
-  S3fsCurl s3fscurl(true);
-  long     res = s3fscurl.PutRequest("/", meta, tmpfd);
+  OSSfsCurl ossfscurl(true);
+  long     res = ossfscurl.PutRequest("/", meta, tmpfd);
   if(res < 0){
-    long responseCode = s3fscurl.GetLastResponseCode();
-    if((responseCode == 400 || responseCode == 403) && S3fsCurl::IsSignatureV4()){
-      S3FS_PRN_ERR("Could not connect, so retry to connect by signature version 2.");
-      S3fsCurl::SetSignatureV4(false);
+    long responseCode = ossfscurl.GetLastResponseCode();
+    if((responseCode == 400 || responseCode == 403) && OSSfsCurl::IsSignatureV4()){
+      OSSFS_PRN_ERR("Could not connect, so retry to connect by signature version 2.");
+      OSSfsCurl::SetSignatureV4(false);
 
       // retry to check
-      s3fscurl.DestroyCurlHandle();
-      res = s3fscurl.PutRequest("/", meta, tmpfd);
+      ossfscurl.DestroyCurlHandle();
+      res = ossfscurl.PutRequest("/", meta, tmpfd);
     }
   }
   if(ptmpfp != NULL){
@@ -987,50 +987,50 @@ static int do_create_bucket()
 // common function for creation of a plain object
 static int create_file_object(const char* path, mode_t mode, uid_t uid, gid_t gid)
 {
-  S3FS_PRN_INFO2("[path=%s][mode=%04o]", path, mode);
+  OSSFS_PRN_INFO2("[path=%s][mode=%04o]", path, mode);
 
   time_t now = time(NULL);
   headers_t meta;
-  meta["Content-Type"]     = S3fsCurl::LookupMimeType(string(path));
-  meta["x-amz-meta-uid"]   = str(uid);
-  meta["x-amz-meta-gid"]   = str(gid);
-  meta["x-amz-meta-mode"]  = str(mode);
-  meta["x-amz-meta-ctime"] = str(now);
-  meta["x-amz-meta-mtime"] = str(now);
+  meta["Content-Type"]     = OSSfsCurl::LookupMimeType(string(path));
+  meta["x-oss-meta-uid"]   = str(uid);
+  meta["x-oss-meta-gid"]   = str(gid);
+  meta["x-oss-meta-mode"]  = str(mode);
+  meta["x-oss-meta-ctime"] = str(now);
+  meta["x-oss-meta-mtime"] = str(now);
 
-  S3fsCurl s3fscurl(true);
-  return s3fscurl.PutRequest(path, meta, -1);    // fd=-1 means for creating zero byte object.
+  OSSfsCurl ossfscurl(true);
+  return ossfscurl.PutRequest(path, meta, -1);    // fd=-1 means for creating zero byte object.
 }
 
-static int s3fs_mknod(const char *_path, mode_t mode, dev_t rdev)
+static int ossfs_mknod(const char *_path, mode_t mode, dev_t rdev)
 {
   WTF8_ENCODE(path)
   int       result;
   struct fuse_context* pcxt;
 
-  S3FS_PRN_INFO("[path=%s][mode=%04o][dev=%ju]", path, mode, (uintmax_t)rdev);
+  OSSFS_PRN_INFO("[path=%s][mode=%04o][dev=%ju]", path, mode, (uintmax_t)rdev);
 
   if(NULL == (pcxt = fuse_get_context())){
     return -EIO;
   }
 
   if(0 != (result = create_file_object(path, mode, pcxt->uid, pcxt->gid))){
-    S3FS_PRN_ERR("could not create object for special file(result=%d)", result);
+    OSSFS_PRN_ERR("could not create object for special file(result=%d)", result);
     return result;
   }
   StatCache::getStatCacheData()->DelStat(path);
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return result;
 }
 
-static int s3fs_create(const char* _path, mode_t mode, struct fuse_file_info* fi)
+static int ossfs_create(const char* _path, mode_t mode, struct fuse_file_info* fi)
 {
   WTF8_ENCODE(path)
   int result;
   struct fuse_context* pcxt;
 
-  S3FS_PRN_INFO("[path=%s][mode=%04o][flags=%d]", path, mode, fi->flags);
+  OSSFS_PRN_INFO("[path=%s][mode=%04o][flags=%d]", path, mode, fi->flags);
 
   if(NULL == (pcxt = fuse_get_context())){
     return -EIO;
@@ -1063,14 +1063,14 @@ static int s3fs_create(const char* _path, mode_t mode, struct fuse_file_info* fi
     return -EIO;
   }
   fi->fh = ent->GetFd();
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return 0;
 }
 
 static int create_directory_object(const char* path, mode_t mode, time_t time, uid_t uid, gid_t gid)
 {
-  S3FS_PRN_INFO1("[path=%s][mode=%04o][time=%jd][uid=%u][gid=%u]", path, mode, (intmax_t)time, (unsigned int)uid, (unsigned int)gid);
+  OSSFS_PRN_INFO1("[path=%s][mode=%04o][time=%jd][uid=%u][gid=%u]", path, mode, (intmax_t)time, (unsigned int)uid, (unsigned int)gid);
 
   if(!path || '\0' == path[0]){
     return -1;
@@ -1082,23 +1082,23 @@ static int create_directory_object(const char* path, mode_t mode, time_t time, u
 
   headers_t meta;
   meta["Content-Type"]     = string("application/x-directory");
-  meta["x-amz-meta-uid"]   = str(uid);
-  meta["x-amz-meta-gid"]   = str(gid);
-  meta["x-amz-meta-mode"]  = str(mode);
-  meta["x-amz-meta-ctime"] = str(time);
-  meta["x-amz-meta-mtime"] = str(time);
+  meta["x-oss-meta-uid"]   = str(uid);
+  meta["x-oss-meta-gid"]   = str(gid);
+  meta["x-oss-meta-mode"]  = str(mode);
+  meta["x-oss-meta-ctime"] = str(time);
+  meta["x-oss-meta-mtime"] = str(time);
 
-  S3fsCurl s3fscurl;
-  return s3fscurl.PutRequest(tpath.c_str(), meta, -1);    // fd=-1 means for creating zero byte object.
+  OSSfsCurl ossfscurl;
+  return ossfscurl.PutRequest(tpath.c_str(), meta, -1);    // fd=-1 means for creating zero byte object.
 }
 
-static int s3fs_mkdir(const char* _path, mode_t mode)
+static int ossfs_mkdir(const char* _path, mode_t mode)
 {
   WTF8_ENCODE(path)
   int result;
   struct fuse_context* pcxt;
 
-  S3FS_PRN_INFO("[path=%s][mode=%04o]", path, mode);
+  OSSFS_PRN_INFO("[path=%s][mode=%04o]", path, mode);
 
   if(NULL == (pcxt = fuse_get_context())){
     return -EIO;
@@ -1117,26 +1117,26 @@ static int s3fs_mkdir(const char* _path, mode_t mode)
 
   result = create_directory_object(path, mode, time(NULL), pcxt->uid, pcxt->gid);
   StatCache::getStatCacheData()->DelStat(path);
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return result;
 }
 
-static int s3fs_unlink(const char* _path)
+static int ossfs_unlink(const char* _path)
 {
   WTF8_ENCODE(path)
   int result;
 
-  S3FS_PRN_INFO("[path=%s]", path);
+  OSSFS_PRN_INFO("[path=%s]", path);
 
   if(0 != (result = check_parent_object_access(path, W_OK | X_OK))){
     return result;
   }
-  S3fsCurl s3fscurl;
-  result = s3fscurl.DeleteRequest(path);
+  OSSfsCurl ossfscurl;
+  result = ossfscurl.DeleteRequest(path);
   FdManager::DeleteCacheFile(path);
   StatCache::getStatCacheData()->DelStat(path);
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return result;
 }
@@ -1144,10 +1144,10 @@ static int s3fs_unlink(const char* _path)
 static int directory_empty(const char* path)
 {
   int result;
-  S3ObjList head;
+  OSSObjList head;
 
   if((result = list_bucket(path, head, "/", true)) != 0){
-    S3FS_PRN_ERR("list_bucket returns error.");
+    OSSFS_PRN_ERR("list_bucket returns error.");
     return result;
   }
   if(!head.IsEmpty()){
@@ -1156,14 +1156,14 @@ static int directory_empty(const char* path)
   return 0;
 }
 
-static int s3fs_rmdir(const char* _path)
+static int ossfs_rmdir(const char* _path)
 {
   WTF8_ENCODE(path)
   int result;
   string strpath;
   struct stat stbuf;
 
-  S3FS_PRN_INFO("[path=%s]", path);
+  OSSFS_PRN_INFO("[path=%s]", path);
 
   if(0 != (result = check_parent_object_access(path, W_OK | X_OK))){
     return result;
@@ -1178,9 +1178,9 @@ static int s3fs_rmdir(const char* _path)
   if('/' != strpath[strpath.length() - 1]){
     strpath += "/";
   }
-  S3fsCurl s3fscurl;
-  result = s3fscurl.DeleteRequest(strpath.c_str());
-  s3fscurl.DestroyCurlHandle();
+  OSSfsCurl ossfscurl;
+  result = ossfscurl.DeleteRequest(strpath.c_str());
+  ossfscurl.DestroyCurlHandle();
   StatCache::getStatCacheData()->DelStat(strpath.c_str());
 
   // double check for old version(before 1.63)
@@ -1194,33 +1194,33 @@ static int s3fs_rmdir(const char* _path)
   if(0 == get_object_attribute(strpath.c_str(), &stbuf, NULL, false)){
     if(S_ISDIR(stbuf.st_mode)){
       // Found "dir" object.
-      result = s3fscurl.DeleteRequest(strpath.c_str());
-      s3fscurl.DestroyCurlHandle();
+      result = ossfscurl.DeleteRequest(strpath.c_str());
+      ossfscurl.DestroyCurlHandle();
       StatCache::getStatCacheData()->DelStat(strpath.c_str());
     }
   }
-  // If there is no "dir" and "dir/" object(this case is made by s3cmd/s3sync),
+  // If there is no "dir" and "dir/" object(this case is made by osscmd/osssync),
   // the cache key is "dir/". So we get error only once(delete "dir/").
 
   // check for "_$folder$" object.
-  // This processing is necessary for other S3 clients compatibility.
+  // This processing is necessary for other OSS clients compatibility.
   if(is_special_name_folder_object(strpath.c_str())){
     strpath += "_$folder$";
-    result   = s3fscurl.DeleteRequest(strpath.c_str());
+    result   = ossfscurl.DeleteRequest(strpath.c_str());
   }
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return result;
 }
 
-static int s3fs_symlink(const char* _from, const char* _to)
+static int ossfs_symlink(const char* _from, const char* _to)
 {
   WTF8_ENCODE(from)
   WTF8_ENCODE(to)
   int result;
   struct fuse_context* pcxt;
 
-  S3FS_PRN_INFO("[from=%s][to=%s]", from, to);
+  OSSFS_PRN_INFO("[from=%s][to=%s]", from, to);
 
   if(NULL == (pcxt = fuse_get_context())){
     return -EIO;
@@ -1238,34 +1238,34 @@ static int s3fs_symlink(const char* _from, const char* _to)
   time_t now = time(NULL);
   headers_t headers;
   headers["Content-Type"]     = string("application/octet-stream"); // Static
-  headers["x-amz-meta-mode"]  = str(S_IFLNK | S_IRWXU | S_IRWXG | S_IRWXO);
-  headers["x-amz-meta-ctime"] = str(now);
-  headers["x-amz-meta-mtime"] = str(now);
-  headers["x-amz-meta-uid"]   = str(pcxt->uid);
-  headers["x-amz-meta-gid"]   = str(pcxt->gid);
+  headers["x-oss-meta-mode"]  = str(S_IFLNK | S_IRWXU | S_IRWXG | S_IRWXO);
+  headers["x-oss-meta-ctime"] = str(now);
+  headers["x-oss-meta-mtime"] = str(now);
+  headers["x-oss-meta-uid"]   = str(pcxt->uid);
+  headers["x-oss-meta-gid"]   = str(pcxt->gid);
 
   // open tmpfile
   FdEntity* ent;
   if(NULL == (ent = FdManager::get()->Open(to, &headers, 0, -1, true, true))){
-    S3FS_PRN_ERR("could not open tmpfile(errno=%d)", errno);
+    OSSFS_PRN_ERR("could not open tmpfile(errno=%d)", errno);
     return -errno;
   }
   // write(without space words)
   string  strFrom   = trim(string(from));
   ssize_t from_size = static_cast<ssize_t>(strFrom.length());
   if(from_size != ent->Write(strFrom.c_str(), 0, from_size)){
-    S3FS_PRN_ERR("could not write tmpfile(errno=%d)", errno);
+    OSSFS_PRN_ERR("could not write tmpfile(errno=%d)", errno);
     FdManager::get()->Close(ent);
     return -errno;
   }
   // upload
   if(0 != (result = ent->Flush(true))){
-    S3FS_PRN_WARN("could not upload tmpfile(result=%d)", result);
+    OSSFS_PRN_WARN("could not upload tmpfile(result=%d)", result);
   }
   FdManager::get()->Close(ent);
 
   StatCache::getStatCacheData()->DelStat(to);
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return result;
 }
@@ -1273,10 +1273,10 @@ static int s3fs_symlink(const char* _from, const char* _to)
 static int rename_object(const char* from, const char* to)
 {
   int result;
-  string s3_realpath;
+  string oss_realpath;
   headers_t meta;
 
-  S3FS_PRN_INFO1("[from=%s][to=%s]", from , to);
+  OSSFS_PRN_INFO1("[from=%s][to=%s]", from , to);
 
   if(0 != (result = check_parent_object_access(to, W_OK | X_OK))){
     // not permit writing "to" object parent dir.
@@ -1289,11 +1289,11 @@ static int rename_object(const char* from, const char* to)
   if(0 != (result = get_object_attribute(from, NULL, &meta))){
     return result;
   }
-  s3_realpath = get_realpath(from);
+  oss_realpath = get_realpath(from);
 
-  meta["x-amz-copy-source"]        = urlEncode(service_path + bucket + s3_realpath);
-  meta["Content-Type"]             = S3fsCurl::LookupMimeType(string(to));
-  meta["x-amz-metadata-directive"] = "REPLACE";
+  meta["x-oss-copy-source"]        = urlEncode(service_path + bucket + oss_realpath);
+  meta["Content-Type"]             = OSSfsCurl::LookupMimeType(string(to));
+  meta["x-oss-metadata-directive"] = "REPLACE";
 
   if(0 != (result = put_headers(to, meta, true))){
     return result;
@@ -1301,7 +1301,7 @@ static int rename_object(const char* from, const char* to)
 
   FdManager::get()->Rename(from, to);
 
-  result = s3fs_unlink(from);
+  result = ossfs_unlink(from);
   StatCache::getStatCacheData()->DelStat(to);
 
   return result;
@@ -1311,7 +1311,7 @@ static int rename_object_nocopy(const char* from, const char* to)
 {
   int result;
 
-  S3FS_PRN_INFO1("[from=%s][to=%s]", from , to);
+  OSSFS_PRN_INFO1("[from=%s][to=%s]", from , to);
 
   if(0 != (result = check_parent_object_access(to, W_OK | X_OK))){
     // not permit writing "to" object parent dir.
@@ -1325,26 +1325,26 @@ static int rename_object_nocopy(const char* from, const char* to)
   // open & load
   FdEntity* ent;
   if(NULL == (ent = get_local_fent(from, true))){
-    S3FS_PRN_ERR("could not open and read file(%s)", from);
+    OSSFS_PRN_ERR("could not open and read file(%s)", from);
     return -EIO;
   }
 
   // Set header
   if(!ent->SetContentType(to)){
-    S3FS_PRN_ERR("could not set content-type for %s", to);
+    OSSFS_PRN_ERR("could not set content-type for %s", to);
     return -EIO;
   }
 
   // upload
   if(0 != (result = ent->RowFlush(to, true))){
-    S3FS_PRN_ERR("could not upload file(%s): result=%d", to, result);
+    OSSFS_PRN_ERR("could not upload file(%s): result=%d", to, result);
     FdManager::get()->Close(ent);
     return result;
   }
   FdManager::get()->Close(ent);
 
   // Remove file
-  result = s3fs_unlink(from);
+  result = ossfs_unlink(from);
 
   // Stats
   StatCache::getStatCacheData()->DelStat(to);
@@ -1359,7 +1359,7 @@ static int rename_large_object(const char* from, const char* to)
   struct stat buf;
   headers_t   meta;
 
-  S3FS_PRN_INFO1("[from=%s][to=%s]", from , to);
+  OSSFS_PRN_INFO1("[from=%s][to=%s]", from , to);
 
   if(0 != (result = check_parent_object_access(to, W_OK | X_OK))){
     // not permit writing "to" object parent dir.
@@ -1373,14 +1373,14 @@ static int rename_large_object(const char* from, const char* to)
     return result;
   }
 
-  S3fsCurl s3fscurl(true);
-  if(0 != (result = s3fscurl.MultipartRenameRequest(from, to, meta, buf.st_size))){
+  OSSfsCurl ossfscurl(true);
+  if(0 != (result = ossfscurl.MultipartRenameRequest(from, to, meta, buf.st_size))){
     return result;
   }
-  s3fscurl.DestroyCurlHandle();
+  ossfscurl.DestroyCurlHandle();
   StatCache::getStatCacheData()->DelStat(to);
 
-  return s3fs_unlink(from);
+  return ossfs_unlink(from);
 }
 
 static int clone_directory_object(const char* from, const char* to)
@@ -1388,7 +1388,7 @@ static int clone_directory_object(const char* from, const char* to)
   int result = -1;
   struct stat stbuf;
 
-  S3FS_PRN_INFO1("[from=%s][to=%s]", from, to);
+  OSSFS_PRN_INFO1("[from=%s][to=%s]", from, to);
 
   // get target's attributes
   if(0 != (result = get_object_attribute(from, &stbuf))){
@@ -1402,8 +1402,8 @@ static int clone_directory_object(const char* from, const char* to)
 
 static int rename_directory(const char* from, const char* to)
 {
-  S3ObjList head;
-  s3obj_list_t headlist;
+  OSSObjList head;
+  ossobj_list_t headlist;
   string strfrom  = from ? from : "";	// from is without "/".
   string strto    = to ? to : "";	// to is without "/" too.
   string basepath = strfrom + "/";
@@ -1418,7 +1418,7 @@ static int rename_directory(const char* from, const char* to)
   int result;
   bool is_dir;
 
-  S3FS_PRN_INFO1("[from=%s][to=%s]", from, to);
+  OSSFS_PRN_INFO1("[from=%s][to=%s]", from, to);
 
   //
   // Initiate and Add base directory into MVNODE struct.
@@ -1444,13 +1444,13 @@ static int rename_directory(const char* from, const char* to)
   // No delimiter is specified, the result(head) is all object keys.
   // (CommonPrefixes is empty, but all object is listed in Key.)
   if(0 != (result = list_bucket(basepath.c_str(), head, NULL))){
-    S3FS_PRN_ERR("list_bucket returns error.");
+    OSSFS_PRN_ERR("list_bucket returns error.");
     return result; 
   }
   head.GetNameList(headlist);                       // get name without "/".
-  S3ObjList::MakeHierarchizedList(headlist, false); // add hierarchized dir.
+  OSSObjList::MakeHierarchizedList(headlist, false); // add hierarchized dir.
 
-  s3obj_list_t::const_iterator liter;
+  ossobj_list_t::const_iterator liter;
   for(liter = headlist.begin(); headlist.end() != liter; ++liter){
     // make "from" and "to" object name.
     string from_name = basepath + (*liter);
@@ -1460,13 +1460,13 @@ static int rename_directory(const char* from, const char* to)
     // Check subdirectory.
     StatCache::getStatCacheData()->HasStat(from_name, etag.c_str()); // Check ETag
     if(0 != get_object_attribute(from_name.c_str(), &stbuf, NULL)){
-      S3FS_PRN_WARN("failed to get %s object attribute.", from_name.c_str());
+      OSSFS_PRN_WARN("failed to get %s object attribute.", from_name.c_str());
       continue;
     }
     if(S_ISDIR(stbuf.st_mode)){
       is_dir = true;
       if(0 != chk_dir_object_type(from_name.c_str(), newpath, from_name, nowcache, NULL, &DirType) || DIRTYPE_UNKNOWN == DirType){
-        S3FS_PRN_WARN("failed to get %s%s object directory type.", basepath.c_str(), (*liter).c_str());
+        OSSFS_PRN_WARN("failed to get %s%s object directory type.", basepath.c_str(), (*liter).c_str());
         continue;
       }
       if(DIRTYPE_NOOBJ != DirType){
@@ -1493,7 +1493,7 @@ static int rename_directory(const char* from, const char* to)
   for(mn_cur = mn_head; mn_cur; mn_cur = mn_cur->next){
     if(mn_cur->is_dir && mn_cur->old_path && '\0' != mn_cur->old_path[0]){
       if(0 != (result = clone_directory_object(mn_cur->old_path, mn_cur->new_path))){
-        S3FS_PRN_ERR("clone_directory_object returned an error(%d)", result);
+        OSSFS_PRN_ERR("clone_directory_object returned an error(%d)", result);
         free_mvnodes(mn_head);
         return -EIO;
       }
@@ -1504,14 +1504,14 @@ static int rename_directory(const char* from, const char* to)
   // does a safe copy - copies first and then deletes old
   for(mn_cur = mn_head; mn_cur; mn_cur = mn_cur->next){
     if(!mn_cur->is_dir){
-      // TODO: call s3fs_rename instead?
+      // TODO: call ossfs_rename instead?
       if(!nocopyapi && !norenameapi){
         result = rename_object(mn_cur->old_path, mn_cur->new_path);
       }else{
         result = rename_object_nocopy(mn_cur->old_path, mn_cur->new_path);
       }
       if(0 != result){
-        S3FS_PRN_ERR("rename_object returned an error(%d)", result);
+        OSSFS_PRN_ERR("rename_object returned an error(%d)", result);
         free_mvnodes(mn_head);
         return -EIO;
       }
@@ -1522,8 +1522,8 @@ static int rename_directory(const char* from, const char* to)
   for(mn_cur = mn_tail; mn_cur; mn_cur = mn_cur->prev){
     if(mn_cur->is_dir && mn_cur->old_path && '\0' != mn_cur->old_path[0]){
       if(!(mn_cur->is_normdir)){
-        if(0 != (result = s3fs_rmdir(mn_cur->old_path))){
-          S3FS_PRN_ERR("s3fs_rmdir returned an error(%d)", result);
+        if(0 != (result = ossfs_rmdir(mn_cur->old_path))){
+          OSSFS_PRN_ERR("ossfs_rmdir returned an error(%d)", result);
           free_mvnodes(mn_head);
           return -EIO;
         }
@@ -1538,14 +1538,14 @@ static int rename_directory(const char* from, const char* to)
   return 0;
 }
 
-static int s3fs_rename(const char* _from, const char* _to)
+static int ossfs_rename(const char* _from, const char* _to)
 {
   WTF8_ENCODE(from)
   WTF8_ENCODE(to)
   struct stat buf;
   int result;
 
-  S3FS_PRN_INFO("[from=%s][to=%s]", from, to);
+  OSSFS_PRN_INFO("[from=%s][to=%s]", from, to);
 
   if(0 != (result = check_parent_object_access(to, W_OK | X_OK))){
     // not permit writing "to" object parent dir.
@@ -1578,20 +1578,20 @@ static int s3fs_rename(const char* _from, const char* _to)
       result = rename_object_nocopy(from, to);
     }
   }
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return result;
 }
 
-static int s3fs_link(const char* _from, const char* _to)
+static int ossfs_link(const char* _from, const char* _to)
 {
   WTF8_ENCODE(from)
   WTF8_ENCODE(to)
-  S3FS_PRN_INFO("[from=%s][to=%s]", from, to);
+  OSSFS_PRN_INFO("[from=%s][to=%s]", from, to);
   return -ENOTSUP;
 }
 
-static int s3fs_chmod(const char* _path, mode_t mode)
+static int ossfs_chmod(const char* _path, mode_t mode)
 {
   WTF8_ENCODE(path)
   int result;
@@ -1602,10 +1602,10 @@ static int s3fs_chmod(const char* _path, mode_t mode)
   struct stat stbuf;
   dirtype nDirType = DIRTYPE_UNKNOWN;
 
-  S3FS_PRN_INFO("[path=%s][mode=%04o]", path, mode);
+  OSSFS_PRN_INFO("[path=%s][mode=%04o]", path, mode);
 
   if(0 == strcmp(path, "/")){
-    S3FS_PRN_ERR("Could not change mode for mount point.");
+    OSSFS_PRN_ERR("Could not change mode for mount point.");
     return -EIO;
   }
   if(0 != (result = check_parent_object_access(path, X_OK))){
@@ -1642,10 +1642,10 @@ static int s3fs_chmod(const char* _path, mode_t mode)
     }
   }else{
     // normal object or directory object of newer version
-    meta["x-amz-meta-ctime"]         = str(time(NULL));
-    meta["x-amz-meta-mode"]          = str(mode);
-    meta["x-amz-copy-source"]        = urlEncode(service_path + bucket + get_realpath(strpath.c_str()));
-    meta["x-amz-metadata-directive"] = "REPLACE";
+    meta["x-oss-meta-ctime"]         = str(time(NULL));
+    meta["x-oss-meta-mode"]          = str(mode);
+    meta["x-oss-copy-source"]        = urlEncode(service_path + bucket + get_realpath(strpath.c_str()));
+    meta["x-oss-metadata-directive"] = "REPLACE";
 
     if(put_headers(strpath.c_str(), meta, true) != 0){
       return -EIO;
@@ -1664,12 +1664,12 @@ static int s3fs_chmod(const char* _path, mode_t mode)
       FdManager::get()->Close(ent);
     }
   }
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return 0;
 }
 
-static int s3fs_chmod_nocopy(const char* _path, mode_t mode)
+static int ossfs_chmod_nocopy(const char* _path, mode_t mode)
 {
   WTF8_ENCODE(path)
   int         result;
@@ -1679,10 +1679,10 @@ static int s3fs_chmod_nocopy(const char* _path, mode_t mode)
   struct stat stbuf;
   dirtype     nDirType = DIRTYPE_UNKNOWN;
 
-  S3FS_PRN_INFO1("[path=%s][mode=%04o]", path, mode);
+  OSSFS_PRN_INFO1("[path=%s][mode=%04o]", path, mode);
 
   if(0 == strcmp(path, "/")){
-    S3FS_PRN_ERR("Could not change mode for mount point.");
+    OSSFS_PRN_ERR("Could not change mode for mount point.");
     return -EIO;
   }
   if(0 != (result = check_parent_object_access(path, X_OK))){
@@ -1724,7 +1724,7 @@ static int s3fs_chmod_nocopy(const char* _path, mode_t mode)
     // open & load
     FdEntity* ent;
     if(NULL == (ent = get_local_fent(strpath.c_str(), true))){
-      S3FS_PRN_ERR("could not open and read file(%s)", strpath.c_str());
+      OSSFS_PRN_ERR("could not open and read file(%s)", strpath.c_str());
       return -EIO;
     }
 
@@ -1733,7 +1733,7 @@ static int s3fs_chmod_nocopy(const char* _path, mode_t mode)
 
     // upload
     if(0 != (result = ent->Flush(true))){
-      S3FS_PRN_ERR("could not upload file(%s): result=%d", strpath.c_str(), result);
+      OSSFS_PRN_ERR("could not upload file(%s): result=%d", strpath.c_str(), result);
       FdManager::get()->Close(ent);
       return result;
     }
@@ -1741,12 +1741,12 @@ static int s3fs_chmod_nocopy(const char* _path, mode_t mode)
 
     StatCache::getStatCacheData()->DelStat(nowcache);
   }
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return result;
 }
 
-static int s3fs_chown(const char* _path, uid_t uid, gid_t gid)
+static int ossfs_chown(const char* _path, uid_t uid, gid_t gid)
 {
   WTF8_ENCODE(path)
   int result;
@@ -1757,10 +1757,10 @@ static int s3fs_chown(const char* _path, uid_t uid, gid_t gid)
   struct stat stbuf;
   dirtype nDirType = DIRTYPE_UNKNOWN;
 
-  S3FS_PRN_INFO("[path=%s][uid=%u][gid=%u]", path, (unsigned int)uid, (unsigned int)gid);
+  OSSFS_PRN_INFO("[path=%s][uid=%u][gid=%u]", path, (unsigned int)uid, (unsigned int)gid);
 
   if(0 == strcmp(path, "/")){
-    S3FS_PRN_ERR("Could not change owner for mount point.");
+    OSSFS_PRN_ERR("Could not change owner for mount point.");
     return -EIO;
   }
   if(0 != (result = check_parent_object_access(path, X_OK))){
@@ -1802,23 +1802,23 @@ static int s3fs_chown(const char* _path, uid_t uid, gid_t gid)
       return result;
     }
   }else{
-    meta["x-amz-meta-ctime"]         = str(time(NULL));
-    meta["x-amz-meta-uid"]           = str(uid);
-    meta["x-amz-meta-gid"]           = str(gid);
-    meta["x-amz-copy-source"]        = urlEncode(service_path + bucket + get_realpath(strpath.c_str()));
-    meta["x-amz-metadata-directive"] = "REPLACE";
+    meta["x-oss-meta-ctime"]         = str(time(NULL));
+    meta["x-oss-meta-uid"]           = str(uid);
+    meta["x-oss-meta-gid"]           = str(gid);
+    meta["x-oss-copy-source"]        = urlEncode(service_path + bucket + get_realpath(strpath.c_str()));
+    meta["x-oss-metadata-directive"] = "REPLACE";
 
     if(put_headers(strpath.c_str(), meta, true) != 0){
       return -EIO;
     }
     StatCache::getStatCacheData()->DelStat(nowcache);
   }
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return 0;
 }
 
-static int s3fs_chown_nocopy(const char* _path, uid_t uid, gid_t gid)
+static int ossfs_chown_nocopy(const char* _path, uid_t uid, gid_t gid)
 {
   WTF8_ENCODE(path)
   int         result;
@@ -1828,10 +1828,10 @@ static int s3fs_chown_nocopy(const char* _path, uid_t uid, gid_t gid)
   struct stat stbuf;
   dirtype     nDirType = DIRTYPE_UNKNOWN;
 
-  S3FS_PRN_INFO1("[path=%s][uid=%u][gid=%u]", path, (unsigned int)uid, (unsigned int)gid);
+  OSSFS_PRN_INFO1("[path=%s][uid=%u][gid=%u]", path, (unsigned int)uid, (unsigned int)gid);
 
   if(0 == strcmp(path, "/")){
-    S3FS_PRN_ERR("Could not change owner for mount point.");
+    OSSFS_PRN_ERR("Could not change owner for mount point.");
     return -EIO;
   }
   if(0 != (result = check_parent_object_access(path, X_OK))){
@@ -1880,7 +1880,7 @@ static int s3fs_chown_nocopy(const char* _path, uid_t uid, gid_t gid)
     // open & load
     FdEntity* ent;
     if(NULL == (ent = get_local_fent(strpath.c_str(), true))){
-      S3FS_PRN_ERR("could not open and read file(%s)", strpath.c_str());
+      OSSFS_PRN_ERR("could not open and read file(%s)", strpath.c_str());
       return -EIO;
     }
 
@@ -1890,7 +1890,7 @@ static int s3fs_chown_nocopy(const char* _path, uid_t uid, gid_t gid)
 
     // upload
     if(0 != (result = ent->Flush(true))){
-      S3FS_PRN_ERR("could not upload file(%s): result=%d", strpath.c_str(), result);
+      OSSFS_PRN_ERR("could not upload file(%s): result=%d", strpath.c_str(), result);
       FdManager::get()->Close(ent);
       return result;
     }
@@ -1898,12 +1898,12 @@ static int s3fs_chown_nocopy(const char* _path, uid_t uid, gid_t gid)
 
     StatCache::getStatCacheData()->DelStat(nowcache);
   }
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return result;
 }
 
-static int s3fs_utimens(const char* _path, const struct timespec ts[2])
+static int ossfs_utimens(const char* _path, const struct timespec ts[2])
 {
   WTF8_ENCODE(path)
   int result;
@@ -1914,10 +1914,10 @@ static int s3fs_utimens(const char* _path, const struct timespec ts[2])
   struct stat stbuf;
   dirtype nDirType = DIRTYPE_UNKNOWN;
 
-  S3FS_PRN_INFO("[path=%s][mtime=%jd]", path, (intmax_t)(ts[1].tv_sec));
+  OSSFS_PRN_INFO("[path=%s][mtime=%jd]", path, (intmax_t)(ts[1].tv_sec));
 
   if(0 == strcmp(path, "/")){
-    S3FS_PRN_ERR("Could not change mtime for mount point.");
+    OSSFS_PRN_ERR("Could not change mtime for mount point.");
     return -EIO;
   }
   if(0 != (result = check_parent_object_access(path, X_OK))){
@@ -1955,21 +1955,21 @@ static int s3fs_utimens(const char* _path, const struct timespec ts[2])
       return result;
     }
   }else{
-    meta["x-amz-meta-mtime"]         = str(ts[1].tv_sec);
-    meta["x-amz-copy-source"]        = urlEncode(service_path + bucket + get_realpath(strpath.c_str()));
-    meta["x-amz-metadata-directive"] = "REPLACE";
+    meta["x-oss-meta-mtime"]         = str(ts[1].tv_sec);
+    meta["x-oss-copy-source"]        = urlEncode(service_path + bucket + get_realpath(strpath.c_str()));
+    meta["x-oss-metadata-directive"] = "REPLACE";
 
     if(put_headers(strpath.c_str(), meta, true) != 0){
       return -EIO;
     }
     StatCache::getStatCacheData()->DelStat(nowcache);
   }
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return 0;
 }
 
-static int s3fs_utimens_nocopy(const char* _path, const struct timespec ts[2])
+static int ossfs_utimens_nocopy(const char* _path, const struct timespec ts[2])
 {
   WTF8_ENCODE(path)
   int         result;
@@ -1979,10 +1979,10 @@ static int s3fs_utimens_nocopy(const char* _path, const struct timespec ts[2])
   struct stat stbuf;
   dirtype     nDirType = DIRTYPE_UNKNOWN;
 
-  S3FS_PRN_INFO1("[path=%s][mtime=%s]", path, str(ts[1].tv_sec).c_str());
+  OSSFS_PRN_INFO1("[path=%s][mtime=%s]", path, str(ts[1].tv_sec).c_str());
 
   if(0 == strcmp(path, "/")){
-    S3FS_PRN_ERR("Could not change mtime for mount point.");
+    OSSFS_PRN_ERR("Could not change mtime for mount point.");
     return -EIO;
   }
   if(0 != (result = check_parent_object_access(path, X_OK))){
@@ -2026,20 +2026,20 @@ static int s3fs_utimens_nocopy(const char* _path, const struct timespec ts[2])
     // open & load
     FdEntity* ent;
     if(NULL == (ent = get_local_fent(strpath.c_str(), true))){
-      S3FS_PRN_ERR("could not open and read file(%s)", strpath.c_str());
+      OSSFS_PRN_ERR("could not open and read file(%s)", strpath.c_str());
       return -EIO;
     }
 
     // set mtime
     if(0 != (result = ent->SetMtime(ts[1].tv_sec))){
-      S3FS_PRN_ERR("could not set mtime to file(%s): result=%d", strpath.c_str(), result);
+      OSSFS_PRN_ERR("could not set mtime to file(%s): result=%d", strpath.c_str(), result);
       FdManager::get()->Close(ent);
       return result;
     }
 
     // upload
     if(0 != (result = ent->Flush(true))){
-      S3FS_PRN_ERR("could not upload file(%s): result=%d", strpath.c_str(), result);
+      OSSFS_PRN_ERR("could not upload file(%s): result=%d", strpath.c_str(), result);
       FdManager::get()->Close(ent);
       return result;
     }
@@ -2047,19 +2047,19 @@ static int s3fs_utimens_nocopy(const char* _path, const struct timespec ts[2])
 
     StatCache::getStatCacheData()->DelStat(nowcache);
   }
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return result;
 }
 
-static int s3fs_truncate(const char* _path, off_t size)
+static int ossfs_truncate(const char* _path, off_t size)
 {
   WTF8_ENCODE(path)
   int result;
   headers_t meta;
   FdEntity* ent = NULL;
 
-  S3FS_PRN_INFO("[path=%s][size=%jd]", path, (intmax_t)size);
+  OSSFS_PRN_INFO("[path=%s][size=%jd]", path, (intmax_t)size);
 
   if(size < 0){
     size = 0;
@@ -2076,11 +2076,11 @@ static int s3fs_truncate(const char* _path, off_t size)
   if(0 == (result = get_object_attribute(path, NULL, &meta))){
     // Exists -> Get file(with size)
     if(NULL == (ent = FdManager::get()->Open(path, &meta, static_cast<ssize_t>(size), -1, false, true))){
-      S3FS_PRN_ERR("could not open file(%s): errno=%d", path, errno);
+      OSSFS_PRN_ERR("could not open file(%s): errno=%d", path, errno);
       return -EIO;
     }
     if(0 != (result = ent->Load(0, static_cast<size_t>(size)))){
-      S3FS_PRN_ERR("could not download file(%s): result=%d", path, result);
+      OSSFS_PRN_ERR("could not download file(%s): result=%d", path, result);
       FdManager::get()->Close(ent);
       return result;
     }
@@ -2094,44 +2094,44 @@ static int s3fs_truncate(const char* _path, off_t size)
     }
     time_t now = time(NULL);
     meta["Content-Type"]     = string("application/octet-stream"); // Static
-    meta["x-amz-meta-mode"]  = str(S_IFLNK | S_IRWXU | S_IRWXG | S_IRWXO);
-    meta["x-amz-meta-ctime"] = str(now);
-    meta["x-amz-meta-mtime"] = str(now);
-    meta["x-amz-meta-uid"]   = str(pcxt->uid);
-    meta["x-amz-meta-gid"]   = str(pcxt->gid);
+    meta["x-oss-meta-mode"]  = str(S_IFLNK | S_IRWXU | S_IRWXG | S_IRWXO);
+    meta["x-oss-meta-ctime"] = str(now);
+    meta["x-oss-meta-mtime"] = str(now);
+    meta["x-oss-meta-uid"]   = str(pcxt->uid);
+    meta["x-oss-meta-gid"]   = str(pcxt->gid);
 
     if(NULL == (ent = FdManager::get()->Open(path, &meta, static_cast<ssize_t>(size), -1, true, true))){
-      S3FS_PRN_ERR("could not open file(%s): errno=%d", path, errno);
+      OSSFS_PRN_ERR("could not open file(%s): errno=%d", path, errno);
       return -EIO;
     }
   }
 
   // upload
   if(0 != (result = ent->Flush(true))){
-    S3FS_PRN_ERR("could not upload file(%s): result=%d", path, result);
+    OSSFS_PRN_ERR("could not upload file(%s): result=%d", path, result);
     FdManager::get()->Close(ent);
     return result;
   }
   FdManager::get()->Close(ent);
 
   StatCache::getStatCacheData()->DelStat(path);
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return result;
 }
 
-static int s3fs_open(const char* _path, struct fuse_file_info* fi)
+static int ossfs_open(const char* _path, struct fuse_file_info* fi)
 {
   WTF8_ENCODE(path)
   int result;
   struct stat st;
   bool needs_flush = false;
 
-  S3FS_PRN_INFO("[path=%s][flags=%d]", path, fi->flags);
+  OSSFS_PRN_INFO("[path=%s][flags=%d]", path, fi->flags);
 
   // clear stat for reading fresh stat.
-  // (if object stat is changed, we refresh it. then s3fs gets always
-  // stat when s3fs open the object).
+  // (if object stat is changed, we refresh it. then ossfs gets always
+  // stat when ossfs open the object).
   StatCache::getStatCacheData()->DelStat(path);
 
   int mask = (O_RDONLY != (fi->flags & O_ACCMODE) ? W_OK : R_OK);
@@ -2168,7 +2168,7 @@ static int s3fs_open(const char* _path, struct fuse_file_info* fi)
   
   if (needs_flush){
     if(0 != (result = ent->RowFlush(path, true))){
-      S3FS_PRN_ERR("could not upload file(%s): result=%d", path, result);
+      OSSFS_PRN_ERR("could not upload file(%s): result=%d", path, result);
       FdManager::get()->Close(ent);
       StatCache::getStatCacheData()->DelStat(path);
       return result;
@@ -2176,67 +2176,67 @@ static int s3fs_open(const char* _path, struct fuse_file_info* fi)
   }
 
   fi->fh = ent->GetFd();
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return 0;
 }
 
-static int s3fs_read(const char* _path, char* buf, size_t size, off_t offset, struct fuse_file_info* fi)
+static int ossfs_read(const char* _path, char* buf, size_t size, off_t offset, struct fuse_file_info* fi)
 {
   WTF8_ENCODE(path)
   ssize_t res;
 
-  S3FS_PRN_DBG("[path=%s][size=%zu][offset=%jd][fd=%llu]", path, size, (intmax_t)offset, (unsigned long long)(fi->fh));
+  OSSFS_PRN_DBG("[path=%s][size=%zu][offset=%jd][fd=%llu]", path, size, (intmax_t)offset, (unsigned long long)(fi->fh));
 
   FdEntity* ent;
   if(NULL == (ent = FdManager::get()->ExistOpen(path, static_cast<int>(fi->fh)))){
-    S3FS_PRN_ERR("could not find opened fd(%s)", path);
+    OSSFS_PRN_ERR("could not find opened fd(%s)", path);
     return -EIO;
   }
   if(ent->GetFd() != static_cast<int>(fi->fh)){
-    S3FS_PRN_WARN("different fd(%d - %llu)", ent->GetFd(), (unsigned long long)(fi->fh));
+    OSSFS_PRN_WARN("different fd(%d - %llu)", ent->GetFd(), (unsigned long long)(fi->fh));
   }
 
   // check real file size
   size_t realsize = 0;
   if(!ent->GetSize(realsize) || 0 == realsize){
-    S3FS_PRN_DBG("file size is 0, so break to read.");
+    OSSFS_PRN_DBG("file size is 0, so break to read.");
     FdManager::get()->Close(ent);
     return 0;
   }
 
   if(0 > (res = ent->Read(buf, offset, size, false))){
-    S3FS_PRN_WARN("failed to read file(%s). result=%jd", path, (intmax_t)res);
+    OSSFS_PRN_WARN("failed to read file(%s). result=%jd", path, (intmax_t)res);
   }
   FdManager::get()->Close(ent);
 
   return static_cast<int>(res);
 }
 
-static int s3fs_write(const char* _path, const char* buf, size_t size, off_t offset, struct fuse_file_info* fi)
+static int ossfs_write(const char* _path, const char* buf, size_t size, off_t offset, struct fuse_file_info* fi)
 {
   WTF8_ENCODE(path)
   ssize_t res;
 
-  S3FS_PRN_DBG("[path=%s][size=%zu][offset=%jd][fd=%llu]", path, size, (intmax_t)offset, (unsigned long long)(fi->fh));
+  OSSFS_PRN_DBG("[path=%s][size=%zu][offset=%jd][fd=%llu]", path, size, (intmax_t)offset, (unsigned long long)(fi->fh));
 
   FdEntity* ent;
   if(NULL == (ent = FdManager::get()->ExistOpen(path, static_cast<int>(fi->fh)))){
-    S3FS_PRN_ERR("could not find opened fd(%s)", path);
+    OSSFS_PRN_ERR("could not find opened fd(%s)", path);
     return -EIO;
   }
   if(ent->GetFd() != static_cast<int>(fi->fh)){
-    S3FS_PRN_WARN("different fd(%d - %llu)", ent->GetFd(), (unsigned long long)(fi->fh));
+    OSSFS_PRN_WARN("different fd(%d - %llu)", ent->GetFd(), (unsigned long long)(fi->fh));
   }
   if(0 > (res = ent->Write(buf, offset, size))){
-    S3FS_PRN_WARN("failed to write file(%s). result=%jd", path, (intmax_t)res);
+    OSSFS_PRN_WARN("failed to write file(%s). result=%jd", path, (intmax_t)res);
   }
   FdManager::get()->Close(ent);
 
   return static_cast<int>(res);
 }
 
-static int s3fs_statfs(const char* _path, struct statvfs* stbuf)
+static int ossfs_statfs(const char* _path, struct statvfs* stbuf)
 {
   // WTF8_ENCODE(path)
   // 256T
@@ -2248,12 +2248,12 @@ static int s3fs_statfs(const char* _path, struct statvfs* stbuf)
   return 0;
 }
 
-static int s3fs_flush(const char* _path, struct fuse_file_info* fi)
+static int ossfs_flush(const char* _path, struct fuse_file_info* fi)
 {
   WTF8_ENCODE(path)
   int result;
 
-  S3FS_PRN_INFO("[path=%s][fd=%llu]", path, (unsigned long long)(fi->fh));
+  OSSFS_PRN_INFO("[path=%s][fd=%llu]", path, (unsigned long long)(fi->fh));
 
   int mask = (O_RDONLY != (fi->flags & O_ACCMODE) ? W_OK : R_OK);
   if(0 != (result = check_parent_object_access(path, X_OK))){
@@ -2274,7 +2274,7 @@ static int s3fs_flush(const char* _path, struct fuse_file_info* fi)
     result = ent->Flush(false);
     FdManager::get()->Close(ent);
   }
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return result;
 }
@@ -2282,12 +2282,12 @@ static int s3fs_flush(const char* _path, struct fuse_file_info* fi)
 // [NOTICE]
 // Assumption is a valid fd.
 //
-static int s3fs_fsync(const char* _path, int datasync, struct fuse_file_info* fi)
+static int ossfs_fsync(const char* _path, int datasync, struct fuse_file_info* fi)
 {
   WTF8_ENCODE(path)
   int result = 0;
 
-  S3FS_PRN_INFO("[path=%s][fd=%llu]", path, (unsigned long long)(fi->fh));
+  OSSFS_PRN_INFO("[path=%s][fd=%llu]", path, (unsigned long long)(fi->fh));
 
   FdEntity* ent;
   if(NULL != (ent = FdManager::get()->ExistOpen(path, static_cast<int>(fi->fh)))){
@@ -2297,7 +2297,7 @@ static int s3fs_fsync(const char* _path, int datasync, struct fuse_file_info* fi
     result = ent->Flush(false);
     FdManager::get()->Close(ent);
   }
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   // Issue 320: Delete stat cache entry because st_size may have changed.
   StatCache::getStatCacheData()->DelStat(path);
@@ -2305,10 +2305,10 @@ static int s3fs_fsync(const char* _path, int datasync, struct fuse_file_info* fi
   return result;
 }
 
-static int s3fs_release(const char* _path, struct fuse_file_info* fi)
+static int ossfs_release(const char* _path, struct fuse_file_info* fi)
 {
   WTF8_ENCODE(path)
-  S3FS_PRN_INFO("[path=%s][fd=%llu]", path, (unsigned long long)(fi->fh));
+  OSSFS_PRN_INFO("[path=%s][fd=%llu]", path, (unsigned long long)(fi->fh));
 
   // [NOTE]
   // All opened file's stats is cached with no truncate flag.
@@ -2327,11 +2327,11 @@ static int s3fs_release(const char* _path, struct fuse_file_info* fi)
 
   FdEntity* ent;
   if(NULL == (ent = FdManager::get()->GetFdEntity(path, static_cast<int>(fi->fh)))){
-    S3FS_PRN_ERR("could not find fd(file=%s)", path);
+    OSSFS_PRN_ERR("could not find fd(file=%s)", path);
     return -EIO;
   }
   if(ent->GetFd() != static_cast<int>(fi->fh)){
-    S3FS_PRN_WARN("different fd(%d - %llu)", ent->GetFd(), (unsigned long long)(fi->fh));
+    OSSFS_PRN_WARN("different fd(%d - %llu)", ent->GetFd(), (unsigned long long)(fi->fh));
   }
 
   // Once for the implicit refcnt from GetFdEntity and again for release
@@ -2339,72 +2339,72 @@ static int s3fs_release(const char* _path, struct fuse_file_info* fi)
   FdManager::get()->Close(ent);
 
   // check - for debug
-  if(IS_S3FS_LOG_DBG()){
+  if(IS_OSSFS_LOG_DBG()){
     if(NULL != (ent = FdManager::get()->GetFdEntity(path, static_cast<int>(fi->fh)))){
-      S3FS_PRN_WARN("file(%s),fd(%d) is still opened.", path, ent->GetFd());
+      OSSFS_PRN_WARN("file(%s),fd(%d) is still opened.", path, ent->GetFd());
     }
   }
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return 0;
 }
 
-static int s3fs_opendir(const char* _path, struct fuse_file_info* fi)
+static int ossfs_opendir(const char* _path, struct fuse_file_info* fi)
 {
   WTF8_ENCODE(path)
   int result;
   int mask = (O_RDONLY != (fi->flags & O_ACCMODE) ? W_OK : R_OK) | X_OK;
 
-  S3FS_PRN_INFO("[path=%s][flags=%d]", path, fi->flags);
+  OSSFS_PRN_INFO("[path=%s][flags=%d]", path, fi->flags);
 
   if(0 == (result = check_object_access(path, mask, NULL))){
     result = check_parent_object_access(path, mask);
   }
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return result;
 }
 
-static bool multi_head_callback(S3fsCurl* s3fscurl)
+static bool multi_head_callback(OSSfsCurl* ossfscurl)
 {
-  if(!s3fscurl){
+  if(!ossfscurl){
     return false;
   }
-  string saved_path = s3fscurl->GetSpacialSavedPath();
-  if(!StatCache::getStatCacheData()->AddStat(saved_path, *(s3fscurl->GetResponseHeaders()))){
-    S3FS_PRN_ERR("failed adding stat cache [path=%s]", saved_path.c_str());
+  string saved_path = ossfscurl->GetSpacialSavedPath();
+  if(!StatCache::getStatCacheData()->AddStat(saved_path, *(ossfscurl->GetResponseHeaders()))){
+    OSSFS_PRN_ERR("failed adding stat cache [path=%s]", saved_path.c_str());
     return false;
   }
   return true;
 }
 
-static S3fsCurl* multi_head_retry_callback(S3fsCurl* s3fscurl)
+static OSSfsCurl* multi_head_retry_callback(OSSfsCurl* ossfscurl)
 {
-  if(!s3fscurl){
+  if(!ossfscurl){
     return NULL;
   }
-  int ssec_key_pos= s3fscurl->GetLastPreHeadSeecKeyPos();
-  int retry_count = s3fscurl->GetMultipartRetryCount();
+  int ssec_key_pos= ossfscurl->GetLastPreHeadSeecKeyPos();
+  int retry_count = ossfscurl->GetMultipartRetryCount();
 
   // retry next sse key.
   // if end of sse key, set retry master count is up.
   ssec_key_pos = (ssec_key_pos < 0 ? 0 : ssec_key_pos + 1);
-  if(0 == S3fsCurl::GetSseKeyCount() || S3fsCurl::GetSseKeyCount() <= ssec_key_pos){
-    if(s3fscurl->IsOverMultipartRetryCount()){
-      S3FS_PRN_ERR("Over retry count(%d) limit(%s).", s3fscurl->GetMultipartRetryCount(), s3fscurl->GetSpacialSavedPath().c_str());
+  if(0 == OSSfsCurl::GetSseKeyCount() || OSSfsCurl::GetSseKeyCount() <= ssec_key_pos){
+    if(ossfscurl->IsOverMultipartRetryCount()){
+      OSSFS_PRN_ERR("Over retry count(%d) limit(%s).", ossfscurl->GetMultipartRetryCount(), ossfscurl->GetSpacialSavedPath().c_str());
       return NULL;
     }
     ssec_key_pos= -1;
     retry_count++;
   }
 
-  S3fsCurl* newcurl = new S3fsCurl(s3fscurl->IsUseAhbe());
-  string path       = s3fscurl->GetPath();
-  string base_path  = s3fscurl->GetBasePath();
-  string saved_path = s3fscurl->GetSpacialSavedPath();
+  OSSfsCurl* newcurl = new OSSfsCurl(ossfscurl->IsUseAhbe());
+  string path       = ossfscurl->GetPath();
+  string base_path  = ossfscurl->GetBasePath();
+  string saved_path = ossfscurl->GetSpacialSavedPath();
 
   if(!newcurl->PreHeadRequest(path, base_path, saved_path, ssec_key_pos)){
-    S3FS_PRN_ERR("Could not duplicate curl object(%s).", saved_path.c_str());
+    OSSFS_PRN_ERR("Could not duplicate curl object(%s).", saved_path.c_str());
     delete newcurl;
     return NULL;
   }
@@ -2413,23 +2413,23 @@ static S3fsCurl* multi_head_retry_callback(S3fsCurl* s3fscurl)
   return newcurl;
 }
 
-static int readdir_multi_head(const char* path, S3ObjList& head, void* buf, fuse_fill_dir_t filler)
+static int readdir_multi_head(const char* path, OSSObjList& head, void* buf, fuse_fill_dir_t filler)
 {
-  S3fsMultiCurl curlmulti(S3fsCurl::GetMaxMultiRequest());
-  s3obj_list_t  headlist;
-  s3obj_list_t  fillerlist;
+  OSSfsMultiCurl curlmulti(OSSfsCurl::GetMaxMultiRequest());
+  ossobj_list_t  headlist;
+  ossobj_list_t  fillerlist;
   int           result = 0;
 
-  S3FS_PRN_INFO1("[path=%s][list=%zu]", path, headlist.size());
+  OSSFS_PRN_INFO1("[path=%s][list=%zu]", path, headlist.size());
 
   // Make base path list.
   head.GetNameList(headlist, true, false);  // get name with "/".
 
-  // Initialize S3fsMultiCurl
+  // Initialize OSSfsMultiCurl
   curlmulti.SetSuccessCallback(multi_head_callback);
   curlmulti.SetRetryCallback(multi_head_retry_callback);
 
-  s3obj_list_t::iterator iter;
+  ossobj_list_t::iterator iter;
 
   fillerlist.clear();
   // Make single head request(with max).
@@ -2449,16 +2449,16 @@ static int readdir_multi_head(const char* path, S3ObjList& head, void* buf, fuse
 
     // First check for directory, start checking "not SSE-C".
     // If checking failed, retry to check with "SSE-C" by retry callback func when SSE-C mode.
-    S3fsCurl* s3fscurl = new S3fsCurl();
-    if(!s3fscurl->PreHeadRequest(disppath, (*iter), disppath)){  // target path = cache key path.(ex "dir/")
-      S3FS_PRN_WARN("Could not make curl object for head request(%s).", disppath.c_str());
-      delete s3fscurl;
+    OSSfsCurl* ossfscurl = new OSSfsCurl();
+    if(!ossfscurl->PreHeadRequest(disppath, (*iter), disppath)){  // target path = cache key path.(ex "dir/")
+      OSSFS_PRN_WARN("Could not make curl object for head request(%s).", disppath.c_str());
+      delete ossfscurl;
       continue;
     }
 
-    if(!curlmulti.SetS3fsCurlObject(s3fscurl)){
-      S3FS_PRN_WARN("Could not make curl object into multi curl(%s).", disppath.c_str());
-      delete s3fscurl;
+    if(!curlmulti.SetOSSfsCurlObject(ossfscurl)){
+      OSSFS_PRN_WARN("Could not make curl object into multi curl(%s).", disppath.c_str());
+      delete ossfscurl;
       continue;
     }
   }
@@ -2466,13 +2466,13 @@ static int readdir_multi_head(const char* path, S3ObjList& head, void* buf, fuse
   // Multi request
   if(0 != (result = curlmulti.Request())){
     // If result is -EIO, it is something error occurred.
-    // This case includes that the object is encrypting(SSE) and s3fs does not have keys.
-    // So s3fs set result to 0 in order to continue the process.
+    // This case includes that the object is encrypting(SSE) and ossfs does not have keys.
+    // So ossfs set result to 0 in order to continue the process.
     if(-EIO == result){
-      S3FS_PRN_WARN("error occurred in multi request(errno=%d), but continue...", result);
+      OSSFS_PRN_WARN("error occurred in multi request(errno=%d), but continue...", result);
       result = 0;
     }else{
-      S3FS_PRN_ERR("error occurred in multi request(errno=%d).", result);
+      OSSFS_PRN_ERR("error occurred in multi request(errno=%d).", result);
       return result;
     }
   }
@@ -2485,11 +2485,11 @@ static int readdir_multi_head(const char* path, S3ObjList& head, void* buf, fuse
     bool in_cache = StatCache::getStatCacheData()->GetStat((*iter), &st);
     string bpath = mybasename((*iter));
     if (use_wtf8)
-        bpath = s3fs_wtf8_decode(bpath);
+        bpath = ossfs_wtf8_decode(bpath);
     if(in_cache){
       filler(buf, bpath.c_str(), &st, 0);
     }else{
-      S3FS_PRN_INFO2("Could not find %s file in stat cache.", (*iter).c_str());
+      OSSFS_PRN_INFO2("Could not find %s file in stat cache.", (*iter).c_str());
       filler(buf, bpath.c_str(), 0, 0);
     }
   }
@@ -2497,13 +2497,13 @@ static int readdir_multi_head(const char* path, S3ObjList& head, void* buf, fuse
   return result;
 }
 
-static int s3fs_readdir(const char* _path, void* buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi)
+static int ossfs_readdir(const char* _path, void* buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi)
 {
   WTF8_ENCODE(path)
-  S3ObjList head;
+  OSSObjList head;
   int result;
 
-  S3FS_PRN_INFO("[path=%s]", path);
+  OSSFS_PRN_INFO("[path=%s]", path);
 
   if(0 != (result = check_object_access(path, X_OK, NULL))){
     return result;
@@ -2511,7 +2511,7 @@ static int s3fs_readdir(const char* _path, void* buf, fuse_fill_dir_t filler, of
 
   // get a list of all the objects
   if((result = list_bucket(path, head, "/")) != 0){
-    S3FS_PRN_ERR("list_bucket returns error(%d).", result);
+    OSSFS_PRN_ERR("list_bucket returns error(%d).", result);
     return result;
   }
 
@@ -2528,25 +2528,25 @@ static int s3fs_readdir(const char* _path, void* buf, fuse_fill_dir_t filler, of
     strpath += "/";
   }
   if(0 != (result = readdir_multi_head(strpath.c_str(), head, buf, filler))){
-    S3FS_PRN_ERR("readdir_multi_head returns error(%d).", result);
+    OSSFS_PRN_ERR("readdir_multi_head returns error(%d).", result);
   }
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return result;
 }
 
-static int list_bucket(const char* path, S3ObjList& head, const char* delimiter, bool check_content_only)
+static int list_bucket(const char* path, OSSObjList& head, const char* delimiter, bool check_content_only)
 {
-  string    s3_realpath;
+  string    oss_realpath;
   string    query_delimiter;;
   string    query_prefix;;
   string    query_maxkey;;
   string    next_marker;
   bool      truncated = true;
-  S3fsCurl  s3fscurl;
+  OSSfsCurl  ossfscurl;
   xmlDocPtr doc;
 
-  S3FS_PRN_INFO1("[path=%s]", path);
+  OSSFS_PRN_INFO1("[path=%s]", path);
 
   if(delimiter && 0 < strlen(delimiter)){
     query_delimiter += "delimiter=";
@@ -2555,12 +2555,12 @@ static int list_bucket(const char* path, S3ObjList& head, const char* delimiter,
   }
 
   query_prefix += "&prefix=";
-  s3_realpath = get_realpath(path);
-  if(0 == s3_realpath.length() || '/' != s3_realpath[s3_realpath.length() - 1]){
+  oss_realpath = get_realpath(path);
+  if(0 == oss_realpath.length() || '/' != oss_realpath[oss_realpath.length() - 1]){
     // last word must be "/"
-    query_prefix += urlEncode(s3_realpath.substr(1) + "/");
+    query_prefix += urlEncode(oss_realpath.substr(1) + "/");
   }else{
-    query_prefix += urlEncode(s3_realpath.substr(1));
+    query_prefix += urlEncode(oss_realpath.substr(1));
   }
   if (check_content_only){
     // Just need to know if there are child objects in dir
@@ -2581,19 +2581,19 @@ static int list_bucket(const char* path, S3ObjList& head, const char* delimiter,
 
     // request
     int result; 
-    if(0 != (result = s3fscurl.ListBucketRequest(path, each_query.c_str()))){
-      S3FS_PRN_ERR("ListBucketRequest returns with error.");
+    if(0 != (result = ossfscurl.ListBucketRequest(path, each_query.c_str()))){
+      OSSFS_PRN_ERR("ListBucketRequest returns with error.");
       return result;
     }
-    BodyData* body = s3fscurl.GetBodyData();
+    BodyData* body = ossfscurl.GetBodyData();
 
     // xmlDocPtr
     if(NULL == (doc = xmlReadMemory(body->str(), static_cast<int>(body->size()), "", NULL, 0))){
-      S3FS_PRN_ERR("xmlReadMemory returns with error.");
+      OSSFS_PRN_ERR("xmlReadMemory returns with error.");
       return -1;
     }
     if(0 != append_objects_from_xml(path, doc, head)){
-      S3FS_PRN_ERR("append_objects_from_xml returns with error.");
+      OSSFS_PRN_ERR("append_objects_from_xml returns with error.");
       xmlFreeDoc(doc);
       return -1;
     }
@@ -2603,32 +2603,32 @@ static int list_bucket(const char* path, S3ObjList& head, const char* delimiter,
         next_marker = (char*)tmpch;
         xmlFree(tmpch);
       }else{
-        // If did not specify "delimiter", s3 did not return "NextMarker".
+        // If did not specify "delimiter", oss did not return "NextMarker".
         // On this case, can use last name for next marker.
         //
         string lastname;
         if(!head.GetLastName(lastname)){
-          S3FS_PRN_WARN("Could not find next marker, thus break loop.");
+          OSSFS_PRN_WARN("Could not find next marker, thus break loop.");
           truncated = false;
         }else{
-          next_marker = s3_realpath.substr(1);
-          if(0 == s3_realpath.length() || '/' != s3_realpath[s3_realpath.length() - 1]){
+          next_marker = oss_realpath.substr(1);
+          if(0 == oss_realpath.length() || '/' != oss_realpath[oss_realpath.length() - 1]){
             next_marker += "/";
           }
           next_marker += lastname;
         }
       }
     }
-    S3FS_XMLFREEDOC(doc);
+    OSSFS_XMLFREEDOC(doc);
 
     // reset(initialize) curl object
-    s3fscurl.DestroyCurlHandle();
+    ossfscurl.DestroyCurlHandle();
 
     if(check_content_only){
       break;
     }
   }
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return 0;
 }
@@ -2636,18 +2636,18 @@ static int list_bucket(const char* path, S3ObjList& head, const char* delimiter,
 static const char* c_strErrorObjectName = "FILE or SUBDIR in DIR";
 
 static int append_objects_from_xml_ex(const char* path, xmlDocPtr doc, xmlXPathContextPtr ctx, 
-       const char* ex_contents, const char* ex_key, const char* ex_etag, int isCPrefix, S3ObjList& head)
+       const char* ex_contents, const char* ex_key, const char* ex_etag, int isCPrefix, OSSObjList& head)
 {
   xmlXPathObjectPtr contents_xp;
   xmlNodeSetPtr content_nodes;
 
   if(NULL == (contents_xp = xmlXPathEvalExpression((xmlChar*)ex_contents, ctx))){
-    S3FS_PRN_ERR("xmlXPathEvalExpression returns null.");
+    OSSFS_PRN_ERR("xmlXPathEvalExpression returns null.");
     return -1;
   }
   if(xmlXPathNodeSetIsEmpty(contents_xp->nodesetval)){
-    S3FS_PRN_DBG("contents_xp->nodesetval is empty.");
-    S3FS_XMLXPATHFREEOBJECT(contents_xp);
+    OSSFS_PRN_DBG("contents_xp->nodesetval is empty.");
+    OSSFS_XMLXPATHFREEOBJECT(contents_xp);
     return 0;
   }
   content_nodes = contents_xp->nodesetval;
@@ -2661,11 +2661,11 @@ static int append_objects_from_xml_ex(const char* path, xmlDocPtr doc, xmlXPathC
     // object name
     xmlXPathObjectPtr key;
     if(NULL == (key = xmlXPathEvalExpression((xmlChar*)ex_key, ctx))){
-      S3FS_PRN_WARN("key is null. but continue.");
+      OSSFS_PRN_WARN("key is null. but continue.");
       continue;
     }
     if(xmlXPathNodeSetIsEmpty(key->nodesetval)){
-      S3FS_PRN_WARN("node is empty. but continue.");
+      OSSFS_PRN_WARN("node is empty. but continue.");
       xmlXPathFreeObject(key);
       continue;
     }
@@ -2673,7 +2673,7 @@ static int append_objects_from_xml_ex(const char* path, xmlDocPtr doc, xmlXPathC
     char* name = get_object_name(doc, key_nodes->nodeTab[0]->xmlChildrenNode, path);
 
     if(!name){
-      S3FS_PRN_WARN("name is something wrong. but continue.");
+      OSSFS_PRN_WARN("name is something wrong. but continue.");
 
     }else if((const char*)name != c_strErrorObjectName){
       is_dir  = isCPrefix ? true : false;
@@ -2684,7 +2684,7 @@ static int append_objects_from_xml_ex(const char* path, xmlDocPtr doc, xmlXPathC
         xmlXPathObjectPtr ETag;
         if(NULL != (ETag = xmlXPathEvalExpression((xmlChar*)ex_etag, ctx))){
           if(xmlXPathNodeSetIsEmpty(ETag->nodesetval)){
-            S3FS_PRN_INFO("ETag->nodesetval is empty.");
+            OSSFS_PRN_INFO("ETag->nodesetval is empty.");
           }else{
             xmlNodeSetPtr etag_nodes = ETag->nodesetval;
             xmlChar* petag = xmlNodeListGetString(doc, etag_nodes->nodeTab[0]->xmlChildrenNode, 1);
@@ -2697,20 +2697,20 @@ static int append_objects_from_xml_ex(const char* path, xmlDocPtr doc, xmlXPathC
         }
       }
       if(!head.insert(name, (0 < stretag.length() ? stretag.c_str() : NULL), is_dir)){
-        S3FS_PRN_ERR("insert_object returns with error.");
+        OSSFS_PRN_ERR("insert_object returns with error.");
         xmlXPathFreeObject(key);
         xmlXPathFreeObject(contents_xp);
         free(name);
-        S3FS_MALLOCTRIM(0);
+        OSSFS_MALLOCTRIM(0);
         return -1;
       }
       free(name);
     }else{
-      S3FS_PRN_DBG("name is file or subdir in dir. but continue.");
+      OSSFS_PRN_DBG("name is file or subdir in dir. but continue.");
     }
     xmlXPathFreeObject(key);
   }
-  S3FS_XMLXPATHFREEOBJECT(contents_xp);
+  OSSFS_XMLXPATHFREEOBJECT(contents_xp);
 
   return 0;
 }
@@ -2735,7 +2735,7 @@ static bool GetXmlNsUrl(xmlDocPtr doc, string& nsurl)
         if(nslist[0] && nslist[0]->href){
           strNs  = (const char*)(nslist[0]->href);
         }
-        S3FS_XMLFREE(nslist);
+        OSSFS_XMLFREE(nslist);
       }
     }
   }
@@ -2746,7 +2746,7 @@ static bool GetXmlNsUrl(xmlDocPtr doc, string& nsurl)
   return result;
 }
 
-static int append_objects_from_xml(const char* path, xmlDocPtr doc, S3ObjList& head)
+static int append_objects_from_xml(const char* path, xmlDocPtr doc, OSSObjList& head)
 {
   string xmlnsurl;
   string ex_contents = "//";
@@ -2769,12 +2769,12 @@ static int append_objects_from_xml(const char* path, xmlDocPtr doc, S3ObjList& h
   xmlXPathContextPtr ctx = xmlXPathNewContext(doc);
 
   if(!noxmlns && GetXmlNsUrl(doc, xmlnsurl)){
-    xmlXPathRegisterNs(ctx, (xmlChar*)"s3", (xmlChar*)xmlnsurl.c_str());
-    ex_contents+= "s3:";
-    ex_key     += "s3:";
-    ex_cprefix += "s3:";
-    ex_prefix  += "s3:";
-    ex_etag    += "s3:";
+    xmlXPathRegisterNs(ctx, (xmlChar*)"oss", (xmlChar*)xmlnsurl.c_str());
+    ex_contents+= "oss:";
+    ex_key     += "oss:";
+    ex_cprefix += "oss:";
+    ex_prefix  += "oss:";
+    ex_etag    += "oss:";
   }
   ex_contents+= "Contents";
   ex_key     += "Key";
@@ -2785,11 +2785,11 @@ static int append_objects_from_xml(const char* path, xmlDocPtr doc, S3ObjList& h
   if(-1 == append_objects_from_xml_ex(prefix.c_str(), doc, ctx, ex_contents.c_str(), ex_key.c_str(), ex_etag.c_str(), 0, head) ||
      -1 == append_objects_from_xml_ex(prefix.c_str(), doc, ctx, ex_cprefix.c_str(), ex_prefix.c_str(), NULL, 1, head) )
   {
-    S3FS_PRN_ERR("append_objects_from_xml_ex returns with error.");
-    S3FS_XMLXPATHFREECONTEXT(ctx);
+    OSSFS_PRN_ERR("append_objects_from_xml_ex returns with error.");
+    OSSFS_XMLXPATHFREECONTEXT(ctx);
     return -1;
   }
-  S3FS_XMLXPATHFREECONTEXT(ctx);
+  OSSFS_XMLXPATHFREECONTEXT(ctx);
 
   return 0;
 }
@@ -2806,8 +2806,8 @@ static xmlChar* get_base_exp(xmlDocPtr doc, const char* exp)
   xmlXPathContextPtr ctx = xmlXPathNewContext(doc);
 
   if(!noxmlns && GetXmlNsUrl(doc, xmlnsurl)){
-    xmlXPathRegisterNs(ctx, (xmlChar*)"s3", (xmlChar*)xmlnsurl.c_str());
-    exp_string = "/s3:ListBucketResult/s3:";
+    xmlXPathRegisterNs(ctx, (xmlChar*)"oss", (xmlChar*)xmlnsurl.c_str());
+    exp_string = "/oss:ListBucketResult/oss:";
   } else {
     exp_string = "/ListBucketResult/";
   }
@@ -2819,7 +2819,7 @@ static xmlChar* get_base_exp(xmlDocPtr doc, const char* exp)
     return NULL;
   }
   if(xmlXPathNodeSetIsEmpty(marker_xp->nodesetval)){
-    S3FS_PRN_ERR("marker_xp->nodesetval is empty.");
+    OSSFS_PRN_ERR("marker_xp->nodesetval is empty.");
     xmlXPathFreeObject(marker_xp);
     xmlXPathFreeContext(ctx);
     return NULL;
@@ -2866,7 +2866,7 @@ static char* get_object_name(xmlDocPtr doc, xmlNodePtr node, const char* path)
   // Get full path
   xmlChar* fullpath = xmlNodeListGetString(doc, node, 1);
   if(!fullpath){
-    S3FS_PRN_ERR("could not get object full path name..");
+    OSSFS_PRN_ERR("could not get object full path name..");
     return NULL;
   }
   // basepath(path) is as same as fullpath.
@@ -2930,7 +2930,7 @@ static int remote_mountpath_exists(const char* path)
 {
   struct stat stbuf;
 
-  S3FS_PRN_INFO1("[path=%s]", path);
+  OSSFS_PRN_INFO1("[path=%s]", path);
 
   // getattr will prefix the path with the remote mountpoint
   if(0 != get_object_attribute("/", &stbuf, NULL)){
@@ -2957,20 +2957,20 @@ static bool parse_xattr_keyval(const std::string& xattrpair, string& key, PXATTR
   size_t pos;
   string tmpval;
   if(string::npos == (pos = xattrpair.find_first_of(':'))){
-    S3FS_PRN_ERR("one of xattr pair(%s) is wrong format.", xattrpair.c_str());
+    OSSFS_PRN_ERR("one of xattr pair(%s) is wrong format.", xattrpair.c_str());
     return false;
   }
   key    = xattrpair.substr(0, pos);
   tmpval = xattrpair.substr(pos + 1);
 
   if(!takeout_str_dquart(key) || !takeout_str_dquart(tmpval)){
-    S3FS_PRN_ERR("one of xattr pair(%s) is wrong format.", xattrpair.c_str());
+    OSSFS_PRN_ERR("one of xattr pair(%s) is wrong format.", xattrpair.c_str());
     return false;
   }
 
   pval = new XATTRVAL;
   pval->length = 0;
-  pval->pvalue = s3fs_decode64(tmpval.c_str(), &pval->length);
+  pval->pvalue = ossfs_decode64(tmpval.c_str(), &pval->length);
 
   return true;
 }
@@ -2991,7 +2991,7 @@ static size_t parse_xattrs(const std::string& strxattrs, xattrs_t& xattrs)
       endpos = jsonxattrs.find_last_of('}');
     }
     if(startpos == string::npos || endpos == string::npos || endpos <= startpos){
-      S3FS_PRN_WARN("xattr header(%s) is not json format.", jsonxattrs.c_str());
+      OSSFS_PRN_WARN("xattr header(%s) is not json format.", jsonxattrs.c_str());
       return 0;
     }
     restxattrs = jsonxattrs.substr(startpos + 1, endpos - (startpos + 1));
@@ -3027,7 +3027,7 @@ static std::string build_xattrs(const xattrs_t& xattrs)
     strxattrs += "\":\"";
 
     if(iter->second){
-      char* base64val = s3fs_base64((iter->second)->pvalue, (iter->second)->length);
+      char* base64val = ossfs_base64((iter->second)->pvalue, (iter->second)->length);
       if(base64val){
         strxattrs += base64val;
         free(base64val);
@@ -3048,7 +3048,7 @@ static int set_xattrs_to_header(headers_t& meta, const char* name, const char* v
   xattrs_t xattrs;
 
   headers_t::iterator iter;
-  if(meta.end() == (iter = meta.find("x-amz-meta-xattr"))){
+  if(meta.end() == (iter = meta.find("x-oss-meta-xattr"))){
 #if defined(XATTR_REPLACE)
     if(XATTR_REPLACE == (flags & XATTR_REPLACE)){
       // there is no xattr header but flags is replace, so failure.
@@ -3090,7 +3090,7 @@ static int set_xattrs_to_header(headers_t& meta, const char* name, const char* v
   xattrs[string(name)] = pval;
 
   // build new strxattrs(not encoded) and set it to headers_t
-  meta["x-amz-meta-xattr"] = build_xattrs(xattrs);
+  meta["x-oss-meta-xattr"] = build_xattrs(xattrs);
 
   free_xattrs(xattrs);
 
@@ -3098,15 +3098,15 @@ static int set_xattrs_to_header(headers_t& meta, const char* name, const char* v
 }
 
 #if defined(__APPLE__)
-static int s3fs_setxattr(const char* path, const char* name, const char* value, size_t size, int flags, uint32_t position)
+static int ossfs_setxattr(const char* path, const char* name, const char* value, size_t size, int flags, uint32_t position)
 #else
-static int s3fs_setxattr(const char* path, const char* name, const char* value, size_t size, int flags)
+static int ossfs_setxattr(const char* path, const char* name, const char* value, size_t size, int flags)
 #endif
 {
-  S3FS_PRN_INFO("[path=%s][name=%s][value=%p][size=%zu][flags=%d]", path, name, value, size, flags);
+  OSSFS_PRN_INFO("[path=%s][name=%s][value=%p][size=%zu][flags=%d]", path, name, value, size, flags);
 
   if((value && 0 == size) || (!value && 0 < size)){
-    S3FS_PRN_ERR("Wrong parameter: value(%p), size(%zu)", value, size);
+    OSSFS_PRN_ERR("Wrong parameter: value(%p), size(%zu)", value, size);
     return 0;
   }
 
@@ -3126,7 +3126,7 @@ static int s3fs_setxattr(const char* path, const char* name, const char* value, 
   dirtype     nDirType = DIRTYPE_UNKNOWN;
 
   if(0 == strcmp(path, "/")){
-    S3FS_PRN_ERR("Could not change mode for mount point.");
+    OSSFS_PRN_ERR("Could not change mode for mount point.");
     return -EIO;
   }
   if(0 != (result = check_parent_object_access(path, X_OK))){
@@ -3173,9 +3173,9 @@ static int s3fs_setxattr(const char* path, const char* name, const char* value, 
   }
 
   // set xattr all object
-  meta["x-amz-meta-ctime"]         = str(time(NULL));
-  meta["x-amz-copy-source"]        = urlEncode(service_path + bucket + get_realpath(strpath.c_str()));
-  meta["x-amz-metadata-directive"] = "REPLACE";
+  meta["x-oss-meta-ctime"]         = str(time(NULL));
+  meta["x-oss-copy-source"]        = urlEncode(service_path + bucket + get_realpath(strpath.c_str()));
+  meta["x-oss-metadata-directive"] = "REPLACE";
 
   if(0 != put_headers(strpath.c_str(), meta, true)){
     return -EIO;
@@ -3186,12 +3186,12 @@ static int s3fs_setxattr(const char* path, const char* name, const char* value, 
 }
 
 #if defined(__APPLE__)
-static int s3fs_getxattr(const char* path, const char* name, char* value, size_t size, uint32_t position)
+static int ossfs_getxattr(const char* path, const char* name, char* value, size_t size, uint32_t position)
 #else
-static int s3fs_getxattr(const char* path, const char* name, char* value, size_t size)
+static int ossfs_getxattr(const char* path, const char* name, char* value, size_t size)
 #endif
 {
-  S3FS_PRN_INFO("[path=%s][name=%s][value=%p][size=%zu]", path, name, value, size);
+  OSSFS_PRN_INFO("[path=%s][name=%s][value=%p][size=%zu]", path, name, value, size);
 
   if(!path || !name){
     return -EIO;
@@ -3219,7 +3219,7 @@ static int s3fs_getxattr(const char* path, const char* name, char* value, size_t
   }
 
   // get xattrs
-  headers_t::iterator hiter = meta.find("x-amz-meta-xattr");
+  headers_t::iterator hiter = meta.find("x-oss-meta-xattr");
   if(meta.end() == hiter){
     // object does not have xattrs
     return -ENOATTR;
@@ -3260,9 +3260,9 @@ static int s3fs_getxattr(const char* path, const char* name, char* value, size_t
   return static_cast<int>(length);
 }
 
-static int s3fs_listxattr(const char* path, char* list, size_t size)
+static int ossfs_listxattr(const char* path, char* list, size_t size)
 {
-  S3FS_PRN_INFO("[path=%s][list=%p][size=%zu]", path, list, size);
+  OSSFS_PRN_INFO("[path=%s][list=%p][size=%zu]", path, list, size);
 
   if(!path){
     return -EIO;
@@ -3284,7 +3284,7 @@ static int s3fs_listxattr(const char* path, char* list, size_t size)
 
   // get xattrs
   headers_t::iterator iter;
-  if(meta.end() == (iter = meta.find("x-amz-meta-xattr"))){
+  if(meta.end() == (iter = meta.find("x-oss-meta-xattr"))){
     // object does not have xattrs
     return 0;
   }
@@ -3328,9 +3328,9 @@ static int s3fs_listxattr(const char* path, char* list, size_t size)
   return total;
 }
 
-static int s3fs_removexattr(const char* path, const char* name)
+static int ossfs_removexattr(const char* path, const char* name)
 {
-  S3FS_PRN_INFO("[path=%s][name=%s]", path, name);
+  OSSFS_PRN_INFO("[path=%s][name=%s]", path, name);
 
   if(!path || !name){
     return -EIO;
@@ -3346,7 +3346,7 @@ static int s3fs_removexattr(const char* path, const char* name)
   dirtype     nDirType = DIRTYPE_UNKNOWN;
 
   if(0 == strcmp(path, "/")){
-    S3FS_PRN_ERR("Could not change mode for mount point.");
+    OSSFS_PRN_ERR("Could not change mode for mount point.");
     return -EIO;
   }
   if(0 != (result = check_parent_object_access(path, X_OK))){
@@ -3368,7 +3368,7 @@ static int s3fs_removexattr(const char* path, const char* name)
   }
 
   // get xattrs
-  headers_t::iterator hiter = meta.find("x-amz-meta-xattr");
+  headers_t::iterator hiter = meta.find("x-oss-meta-xattr");
   if(meta.end() == hiter){
     // object does not have xattrs
     return -ENOATTR;
@@ -3391,9 +3391,9 @@ static int s3fs_removexattr(const char* path, const char* name)
 
   // build new xattr
   if(!xattrs.empty()){
-    meta["x-amz-meta-xattr"] = build_xattrs(xattrs);
+    meta["x-oss-meta-xattr"] = build_xattrs(xattrs);
   }else{
-    meta.erase("x-amz-meta-xattr");
+    meta.erase("x-oss-meta-xattr");
   }
 
   if(S_ISDIR(stbuf.st_mode) && IS_REPLACEDIR(nDirType)){
@@ -3418,8 +3418,8 @@ static int s3fs_removexattr(const char* path, const char* name)
   }
 
   // set xattr all object
-  meta["x-amz-copy-source"]        = urlEncode(service_path + bucket + get_realpath(strpath.c_str()));
-  meta["x-amz-metadata-directive"] = "REPLACE";
+  meta["x-oss-copy-source"]        = urlEncode(service_path + bucket + get_realpath(strpath.c_str()));
+  meta["x-oss-metadata-directive"] = "REPLACE";
 
   if(0 != put_headers(strpath.c_str(), meta, true)){
     free_xattrs(xattrs);
@@ -3432,45 +3432,45 @@ static int s3fs_removexattr(const char* path, const char* name)
   return 0;
 }
    
-// s3fs_init calls this function to exit cleanly from the fuse event loop.
+// ossfs_init calls this function to exit cleanly from the fuse event loop.
 //
 // There's no way to pass an exit status to the high-level event loop API, so 
 // this function stores the exit value in a global for main()
-static void s3fs_exit_fuseloop(int exit_status) {
-    S3FS_PRN_ERR("Exiting FUSE event loop due to errors\n");
-    s3fs_init_deferred_exit_status = exit_status;
+static void ossfs_exit_fuseloop(int exit_status) {
+    OSSFS_PRN_ERR("Exiting FUSE event loop due to errors\n");
+    ossfs_init_deferred_exit_status = exit_status;
     struct fuse_context *ctx = fuse_get_context();
     if (NULL != ctx) {
         fuse_exit(ctx->fuse);
     }
 }
 
-static void* s3fs_init(struct fuse_conn_info* conn)
+static void* ossfs_init(struct fuse_conn_info* conn)
 {
-  S3FS_PRN_INIT_INFO("init v%s(commit:%s) with %s", VERSION, COMMIT_HASH_VAL, s3fs_crypt_lib_name());
+  OSSFS_PRN_INIT_INFO("init v%s(commit:%s) with %s", VERSION, COMMIT_HASH_VAL, ossfs_crypt_lib_name());
 
   // cache(remove cache dirs at first)
   if(is_remove_cache && (!CacheFileStat::DeleteCacheFileStatDirectory() || !FdManager::DeleteCacheDirectory())){
-    S3FS_PRN_DBG("Could not initialize cache directory.");
+    OSSFS_PRN_DBG("Could not initialize cache directory.");
   }
 
   // check loading IAM role name
   if(load_iamrole){
     // load IAM role name from http://169.254.169.254/latest/meta-data/iam/security-credentials
     //
-    S3fsCurl s3fscurl;
-    if(!s3fscurl.LoadIAMRoleFromMetaData()){
-      S3FS_PRN_CRIT("could not load IAM role name from meta data.");
-      s3fs_exit_fuseloop(EXIT_FAILURE);
+    OSSfsCurl ossfscurl;
+    if(!ossfscurl.LoadIAMRoleFromMetaData()){
+      OSSFS_PRN_CRIT("could not load IAM role name from meta data.");
+      ossfs_exit_fuseloop(EXIT_FAILURE);
       return NULL;
     }
-    S3FS_PRN_INFO("loaded IAM role name = %s", S3fsCurl::GetIAMRole());
+    OSSFS_PRN_INFO("loaded IAM role name = %s", OSSfsCurl::GetIAMRole());
   }
 
   if (create_bucket){
     int result = do_create_bucket();
     if(result != 0){
-      s3fs_exit_fuseloop(result);
+      ossfs_exit_fuseloop(result);
       return NULL;
     }
   }
@@ -3478,8 +3478,8 @@ static void* s3fs_init(struct fuse_conn_info* conn)
   // Check Bucket
   {
     int result;
-    if(EXIT_SUCCESS != (result = s3fs_check_service())){
-      s3fs_exit_fuseloop(result);
+    if(EXIT_SUCCESS != (result = ossfs_check_service())){
+      ossfs_exit_fuseloop(result);
       return NULL;
     }
   }
@@ -3498,26 +3498,26 @@ static void* s3fs_init(struct fuse_conn_info* conn)
   return NULL;
 }
 
-static void s3fs_destroy(void*)
+static void ossfs_destroy(void*)
 {
-  S3FS_PRN_INFO("destroy");
+  OSSFS_PRN_INFO("destroy");
 
   // cache(remove at last)
   if(is_remove_cache && (!CacheFileStat::DeleteCacheFileStatDirectory() || !FdManager::DeleteCacheDirectory())){
-    S3FS_PRN_WARN("Could not remove cache directory.");
+    OSSFS_PRN_WARN("Could not remove cache directory.");
   }
 }
 
-static int s3fs_access(const char* path, int mask)
+static int ossfs_access(const char* path, int mask)
 {
-  S3FS_PRN_INFO("[path=%s][mask=%s%s%s%s]", path,
+  OSSFS_PRN_INFO("[path=%s][mask=%s%s%s%s]", path,
           ((mask & R_OK) == R_OK) ? "R_OK " : "",
           ((mask & W_OK) == W_OK) ? "W_OK " : "",
           ((mask & X_OK) == X_OK) ? "X_OK " : "",
           (mask == F_OK) ? "F_OK" : "");
 
   int result = check_object_access(path, mask, NULL);
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
   return result;
 }
 
@@ -3533,23 +3533,23 @@ static xmlChar* get_exp_value_xml(xmlDocPtr doc, xmlXPathContextPtr ctx, const c
 
   // search exp_key tag
   if(NULL == (exp = xmlXPathEvalExpression((xmlChar*)exp_key, ctx))){
-    S3FS_PRN_ERR("Could not find key(%s).", exp_key);
+    OSSFS_PRN_ERR("Could not find key(%s).", exp_key);
     return NULL;
   }
   if(xmlXPathNodeSetIsEmpty(exp->nodesetval)){
-    S3FS_PRN_ERR("Key(%s) node is empty.", exp_key);
-    S3FS_XMLXPATHFREEOBJECT(exp);
+    OSSFS_PRN_ERR("Key(%s) node is empty.", exp_key);
+    OSSFS_XMLXPATHFREEOBJECT(exp);
     return NULL;
   }
   // get exp_key value & set in struct
   exp_nodes = exp->nodesetval;
   if(NULL == (exp_value = xmlNodeListGetString(doc, exp_nodes->nodeTab[0]->xmlChildrenNode, 1))){
-    S3FS_PRN_ERR("Key(%s) value is empty.", exp_key);
-    S3FS_XMLXPATHFREEOBJECT(exp);
+    OSSFS_PRN_ERR("Key(%s) value is empty.", exp_key);
+    OSSFS_XMLXPATHFREEOBJECT(exp);
     return NULL;
   }
 
-  S3FS_XMLXPATHFREEOBJECT(exp);
+  OSSFS_XMLXPATHFREEOBJECT(exp);
   return exp_value;
 }
 
@@ -3584,7 +3584,7 @@ static bool abort_incomp_mpu_list(incomp_mpu_list_t& list, time_t abort_time)
   time_t now_time = time(NULL);
 
   // do removing.
-  S3fsCurl s3fscurl;
+  OSSfsCurl ossfscurl;
   bool     result = true;
   for(incomp_mpu_list_t::iterator iter = list.begin(); iter != list.end(); ++iter){
     const char* tpath     = (*iter).key.c_str();
@@ -3593,7 +3593,7 @@ static bool abort_incomp_mpu_list(incomp_mpu_list_t& list, time_t abort_time)
     if(0 != abort_time){    // abort_time is 0, it means all.
       time_t    date = 0;
       if(!get_unixtime_from_iso8601((*iter).date.c_str(), date)){
-        S3FS_PRN_DBG("date format is not ISO 8601 for %s multipart uploading object, skip this.", tpath);
+        OSSFS_PRN_DBG("date format is not ISO 8601 for %s multipart uploading object, skip this.", tpath);
         continue;
       }
       if(now_time <= (date + abort_time)){
@@ -3601,15 +3601,15 @@ static bool abort_incomp_mpu_list(incomp_mpu_list_t& list, time_t abort_time)
       }
     }
 
-    if(0 != s3fscurl.AbortMultipartUpload(tpath, upload_id)){
-      S3FS_PRN_EXIT("Failed to remove %s multipart uploading object.", tpath);
+    if(0 != ossfscurl.AbortMultipartUpload(tpath, upload_id)){
+      OSSFS_PRN_EXIT("Failed to remove %s multipart uploading object.", tpath);
       result = false;
     }else{
       printf("Succeed to remove %s multipart uploading object.\n", tpath);
     }
 
     // reset(initialize) curl object
-    s3fscurl.DestroyCurlHandle();
+    ossfscurl.DestroyCurlHandle();
   }
 
   return result;
@@ -3630,11 +3630,11 @@ static bool get_incomp_mpu_list(xmlDocPtr doc, incomp_mpu_list_t& list)
   string ex_date;
 
   if(!noxmlns && GetXmlNsUrl(doc, xmlnsurl)){
-    xmlXPathRegisterNs(ctx, (xmlChar*)"s3", (xmlChar*)xmlnsurl.c_str());
-    ex_upload += "s3:";
-    ex_key    += "s3:";
-    ex_id     += "s3:";
-    ex_date   += "s3:";
+    xmlXPathRegisterNs(ctx, (xmlChar*)"oss", (xmlChar*)xmlnsurl.c_str());
+    ex_upload += "oss:";
+    ex_key    += "oss:";
+    ex_id     += "oss:";
+    ex_date   += "oss:";
   }
   ex_upload += "Upload";
   ex_key    += "Key";
@@ -3644,13 +3644,13 @@ static bool get_incomp_mpu_list(xmlDocPtr doc, incomp_mpu_list_t& list)
   // get "Upload" Tags
   xmlXPathObjectPtr  upload_xp;
   if(NULL == (upload_xp = xmlXPathEvalExpression((xmlChar*)ex_upload.c_str(), ctx))){
-    S3FS_PRN_ERR("xmlXPathEvalExpression returns null.");
+    OSSFS_PRN_ERR("xmlXPathEvalExpression returns null.");
     return false;
   }
   if(xmlXPathNodeSetIsEmpty(upload_xp->nodesetval)){
-    S3FS_PRN_INFO("upload_xp->nodesetval is empty.");
-    S3FS_XMLXPATHFREEOBJECT(upload_xp);
-    S3FS_XMLXPATHFREECONTEXT(ctx);
+    OSSFS_PRN_INFO("upload_xp->nodesetval is empty.");
+    OSSFS_XMLXPATHFREEOBJECT(upload_xp);
+    OSSFS_XMLXPATHFREECONTEXT(ctx);
     return true;
   }
 
@@ -3674,58 +3674,58 @@ static bool get_incomp_mpu_list(xmlDocPtr doc, incomp_mpu_list_t& list)
       part.key = "";
     }
     part.key += (char*)ex_value;
-    S3FS_XMLFREE(ex_value);
+    OSSFS_XMLFREE(ex_value);
 
     // search "UploadId" tag
     if(NULL == (ex_value = get_exp_value_xml(doc, ctx, ex_id.c_str()))){
       continue;
     }
     part.id = (char*)ex_value;
-    S3FS_XMLFREE(ex_value);
+    OSSFS_XMLFREE(ex_value);
 
     // search "Initiated" tag
     if(NULL == (ex_value = get_exp_value_xml(doc, ctx, ex_date.c_str()))){
       continue;
     }
     part.date = (char*)ex_value;
-    S3FS_XMLFREE(ex_value);
+    OSSFS_XMLFREE(ex_value);
 
     list.push_back(part);
   }
 
-  S3FS_XMLXPATHFREEOBJECT(upload_xp);
-  S3FS_XMLXPATHFREECONTEXT(ctx);
+  OSSFS_XMLXPATHFREEOBJECT(upload_xp);
+  OSSFS_XMLXPATHFREECONTEXT(ctx);
 
   return true;
 }
 
-static int s3fs_utility_processing(time_t abort_time)
+static int ossfs_utility_processing(time_t abort_time)
 {
   if(NO_UTILITY_MODE == utility_mode){
     return EXIT_FAILURE;
   }
-  printf("\n*** s3fs run as utility mode.\n\n");
+  printf("\n*** ossfs run as utility mode.\n\n");
 
-  S3fsCurl s3fscurl;
+  OSSfsCurl ossfscurl;
   string   body;
   int      result = EXIT_SUCCESS;
-  if(0 != s3fscurl.MultipartListRequest(body)){
-    S3FS_PRN_EXIT("Could not get list multipart upload.\nThere is no incomplete multipart uploaded object in bucket.\n");
+  if(0 != ossfscurl.MultipartListRequest(body)){
+    OSSFS_PRN_EXIT("Could not get list multipart upload.\nThere is no incomplete multipart uploaded object in bucket.\n");
     result = EXIT_FAILURE;
   }else{
     // parse result(incomplete multipart upload information)
-    S3FS_PRN_DBG("response body = {\n%s\n}", body.c_str());
+    OSSFS_PRN_DBG("response body = {\n%s\n}", body.c_str());
 
     xmlDocPtr doc;
     if(NULL == (doc = xmlReadMemory(body.c_str(), static_cast<int>(body.size()), "", NULL, 0))){
-      S3FS_PRN_DBG("xmlReadMemory exited with error.");
+      OSSFS_PRN_DBG("xmlReadMemory exited with error.");
       result = EXIT_FAILURE;
 
     }else{
       // make incomplete uploads list
       incomp_mpu_list_t list;
       if(!get_incomp_mpu_list(doc, list)){
-        S3FS_PRN_DBG("get_incomp_mpu_list exited with error.");
+        OSSFS_PRN_DBG("get_incomp_mpu_list exited with error.");
         result = EXIT_FAILURE;
 
       }else{
@@ -3735,29 +3735,29 @@ static int s3fs_utility_processing(time_t abort_time)
         }else if(INCOMP_TYPE_ABORT == utility_mode){
           // remove
           if(!abort_incomp_mpu_list(list, abort_time)){
-            S3FS_PRN_DBG("an error occurred during removal process.");
+            OSSFS_PRN_DBG("an error occurred during removal process.");
             result = EXIT_FAILURE;
           }
         }
       }
-      S3FS_XMLFREEDOC(doc);
+      OSSFS_XMLFREEDOC(doc);
     }
   }
 
   // ssl
-  s3fs_destroy_global_ssl();
+  ossfs_destroy_global_ssl();
 
   return result;
 }
 
 //
-// If calling with wrong region, s3fs gets following error body as 400 error code.
+// If calling with wrong region, ossfs gets following error body as 400 error code.
 // "<Error><Code>AuthorizationHeaderMalformed</Code><Message>The authorization header is 
-//  malformed; the region 'us-east-1' is wrong; expecting 'ap-northeast-1'</Message>
+//  malformed; the region 'cn-north-3' is wrong; expecting 'ap-northeast-1'</Message>
 //  <Region>ap-northeast-1</Region><RequestId>...</RequestId><HostId>...</HostId>
 //  </Error>"
 //
-// So this is cheep codes but s3fs should get correct region automatically.
+// So this is cheep codes but ossfs should get correct region automatically.
 //
 static bool check_region_error(const char* pbody, const string& currentep, string& expectregion)
 {
@@ -3789,103 +3789,107 @@ static bool check_region_error(const char* pbody, const string& currentep, strin
   return true;
 }
 
-static int s3fs_check_service()
+static int ossfs_check_service()
 {
-  S3FS_PRN_INFO("check services.");
+  OSSFS_PRN_INFO("check services.");
 
-  // At first time for access S3, we check IAM role if it sets.
-  if(!S3fsCurl::CheckIAMCredentialUpdate()){
-    S3FS_PRN_CRIT("Failed to check IAM role name(%s).", S3fsCurl::GetIAMRole());
+  // At first time for access OSS, we check IAM role if it sets.
+  if(!OSSfsCurl::CheckIAMCredentialUpdate()){
+    OSSFS_PRN_CRIT("Failed to check IAM role name(%s).", OSSfsCurl::GetIAMRole());
     return EXIT_FAILURE;
   }
 
-  S3fsCurl s3fscurl;
+  OSSfsCurl ossfscurl;
   int      res;
-  if(0 > (res = s3fscurl.CheckBucket())){
+  if(0 > (res = ossfscurl.CheckBucket())){
     // get response code
-    long responseCode = s3fscurl.GetLastResponseCode();
+    long responseCode = ossfscurl.GetLastResponseCode();
 
     // check wrong endpoint, and automatically switch endpoint
     if(300 <= responseCode && responseCode < 500){
 
       // check region error(for putting message or retrying)
-      BodyData* body = s3fscurl.GetBodyData();
+      BodyData* body = ossfscurl.GetBodyData();
       string    expectregion;
       if(check_region_error(body->str(), endpoint, expectregion)){
         // [NOTE]
-        // If endpoint is not specified(using us-east-1 region) and
+        // If endpoint is not specified(using cn-north-3 region) and
         // an error is encountered accessing a different region, we
         // will retry the check on the expected region.
         // see) https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingBucket.html#access-bucket-intro
         //
         if(is_specified_endpoint){
           const char* tmp_expect_ep = expectregion.c_str();
-          S3FS_PRN_CRIT("The bucket region is not '%s', it is correctly '%s'. You should specify 'endpoint=%s' option.", 
+          OSSFS_PRN_CRIT("The bucket region is not '%s', it is correctly '%s'. You should specify 'endpoint=%s' option.", 
             endpoint.c_str(), tmp_expect_ep, tmp_expect_ep);
 
         }else{
           // current endpoint is wrong, so try to connect to expected region.
-          S3FS_PRN_CRIT("Failed to connect region '%s'(default), so retry to connect region '%s'.", endpoint.c_str(), expectregion.c_str());
+          OSSFS_PRN_CRIT("Failed to connect region '%s'(default), so retry to connect region '%s'.", endpoint.c_str(), expectregion.c_str());
           endpoint = expectregion;
-          if(S3fsCurl::IsSignatureV4()){
-              if(host == "http://s3.amazonaws.com"){
-                  host = "http://s3-" + endpoint + ".amazonaws.com";
-              }else if(host == "https://s3.amazonaws.com"){
-                  host = "https://s3-" + endpoint + ".amazonaws.com";
+          if(OSSfsCurl::IsSignatureV4()){
+              if(host == "http://oss.cn-north-3.inspurcloudoss.com"){
+                  host = "http://oss." + endpoint + "inspurcloudoss.com";
+              }else if(host == "https://oss.cn-north-3.inspurcloudoss.com"){
+                  host = "https://oss." + endpoint + "inspurcloudoss.com";
               }
           }
 
           // retry to check with new endpoint
-          s3fscurl.DestroyCurlHandle();
-          res          = s3fscurl.CheckBucket();
-          responseCode = s3fscurl.GetLastResponseCode();
+          ossfscurl.DestroyCurlHandle();
+          res          = ossfscurl.CheckBucket();
+          responseCode = ossfscurl.GetLastResponseCode();
         }
       }
     }
 
     // try signature v2
-    if(0 > res && (responseCode == 400 || responseCode == 403) && S3fsCurl::IsSignatureV4()){
+    if(0 > res && (responseCode == 400 || responseCode == 403) && OSSfsCurl::IsSignatureV4()){
       // switch sigv2
-      S3FS_PRN_CRIT("Failed to connect by sigv4, so retry to connect by signature version 2.");
-      S3fsCurl::SetSignatureV4(false);
+      OSSFS_PRN_CRIT("Failed to connect by sigv4, so retry to connect by signature version 2.");
+      OSSfsCurl::SetSignatureV4(false);
 
       // retry to check with sigv2
-      s3fscurl.DestroyCurlHandle();
-      res          = s3fscurl.CheckBucket();
-      responseCode = s3fscurl.GetLastResponseCode();
+      ossfscurl.DestroyCurlHandle();
+      res          = ossfscurl.CheckBucket();
+      responseCode = ossfscurl.GetLastResponseCode();
     }
 
     // check errors(after retrying)
     if(0 > res && responseCode != 200 && responseCode != 301){
       if(responseCode == 400){
-        S3FS_PRN_CRIT("Bad Request(host=%s) - result of checking service.", host.c_str());
+        OSSFS_PRN_CRIT("Bad Request(host=%s) - result of checking service.", host.c_str());
 
       }else if(responseCode == 403){
-        S3FS_PRN_CRIT("invalid credentials(host=%s) - result of checking service.", host.c_str());
+        OSSFS_PRN_CRIT("invalid credentials(host=%s) - result of checking service.", host.c_str());
 
       }else if(responseCode == 404){
-        S3FS_PRN_CRIT("bucket not found(host=%s) - result of checking service.", host.c_str());
+        OSSFS_PRN_CRIT("bucket not found(host=%s) - result of checking service.", host.c_str());
 
       }else if(responseCode == CURLE_OPERATION_TIMEDOUT){
         // unable to connect
-        S3FS_PRN_CRIT("unable to connect bucket and timeout(host=%s) - result of checking service.", host.c_str());
+        OSSFS_PRN_CRIT("unable to connect bucket and timeout(host=%s) - result of checking service.", host.c_str());
+
+      }else if(responseCode == CURLE_COULDNT_RESOLVE_HOST){
+        // unable to resolve host
+        OSSFS_PRN_CRIT("unable to resolve host '%s'. Try to add option '-o use_path_request_style' if you use IP.", host.c_str());
       }else{
         // another error
-        S3FS_PRN_CRIT("unable to connect(host=%s) - result of checking service.", host.c_str());
+        OSSFS_PRN_CRIT("unable to connect(host=%s) - result of checking service.", host.c_str());
       }
       return EXIT_FAILURE;
     }
   }
-  s3fscurl.DestroyCurlHandle();
+  ossfscurl.DestroyCurlHandle();
 
   // make sure remote mountpath exists and is a directory
   if(!mount_prefix.empty()){
     if(remote_mountpath_exists(mount_prefix.c_str()) != 0){
-      S3FS_PRN_CRIT("remote mountpath %s not found.", mount_prefix.c_str());
+      OSSFS_PRN_CRIT("remote mountpath %s not found.", mount_prefix.c_str());
       return EXIT_FAILURE;
     }
   }
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   return EXIT_SUCCESS;
 }
@@ -3894,8 +3898,8 @@ static int s3fs_check_service()
 // Read and Parse passwd file
 //
 // The line of the password file is one of the following formats:
-//   (1) "accesskey:secretkey"         : AWS format for default(all) access key/secret key
-//   (2) "bucket:accesskey:secretkey"  : AWS format for bucket's access key/secret key
+//   (1) "accesskey:secretkey"         : OSS format for default(all) access key/secret key
+//   (2) "bucket:accesskey:secretkey"  : OSS format for bucket's access key/secret key
 //   (3) "key=value"                   : Content-dependent KeyValue contents
 //
 // This function sets result into bucketkvmap_t, it bucket name and key&value mapping.
@@ -3915,7 +3919,7 @@ static int parse_passwd_file(bucketkvmap_t& resmap)
   // open passwd file
   ifstream PF(passwd_file.c_str());
   if(!PF.good()){
-    S3FS_PRN_EXIT("could not open passwd file : %s", passwd_file.c_str());
+    OSSFS_PRN_EXIT("could not open passwd file : %s", passwd_file.c_str());
     return -1;
   }
 
@@ -3929,11 +3933,11 @@ static int parse_passwd_file(bucketkvmap_t& resmap)
       continue;
     }
     if(string::npos != line.find_first_of(" \t")){
-      S3FS_PRN_EXIT("invalid line in passwd file, found whitespace character.");
+      OSSFS_PRN_EXIT("invalid line in passwd file, found whitespace character.");
       return -1;
     }
     if(0 == line.find_first_of('[')){
-      S3FS_PRN_EXIT("invalid line in passwd file, found a bracket \"[\" character.");
+      OSSFS_PRN_EXIT("invalid line in passwd file, found a bracket \"[\" character.");
       return -1;
     }
     linelist.push_back(line);
@@ -3953,7 +3957,7 @@ static int parse_passwd_file(bucketkvmap_t& resmap)
       continue;
     }
     if(kv.end() != kv.find(key)){
-      S3FS_PRN_WARN("same key name(%s) found in passwd file, skip this.", key.c_str());
+      OSSFS_PRN_WARN("same key name(%s) found in passwd file, skip this.", key.c_str());
       continue;
     }
     kv[key] = val;
@@ -3983,12 +3987,12 @@ static int parse_passwd_file(bucketkvmap_t& resmap)
       secret    = trim(iter->substr(first_pos + 1, string::npos));
     }
     if(resmap.end() != resmap.find(bucketname)){
-      S3FS_PRN_EXIT("there are multiple entries for the same bucket(%s) in the passwd file.", (bucketname.empty() ? "default" : bucketname.c_str()));
+      OSSFS_PRN_EXIT("there are multiple entries for the same bucket(%s) in the passwd file.", (bucketname.empty() ? "default" : bucketname.c_str()));
       return -1;
     }
     kv.clear();
-    kv[string(aws_accesskeyid)] = accesskey;
-    kv[string(aws_secretkey)]   = secret;
+    kv[string(oss_accesskeyid)] = accesskey;
+    kv[string(oss_secretkey)]   = secret;
     resmap[bucketname]          = kv;
   }
   return (resmap.empty() ? 0 : 1);
@@ -3999,10 +4003,10 @@ static int parse_passwd_file(bucketkvmap_t& resmap)
 //          0 - NG(could not read)
 //         -1 - Should shutdown immediately
 //
-static int check_for_aws_format(const kvmap_t& kvmap)
+static int check_for_oss_format(const kvmap_t& kvmap)
 {
-  string str1(aws_accesskeyid);
-  string str2(aws_secretkey);
+  string str1(oss_accesskeyid);
+  string str2(oss_secretkey);
 
   if(kvmap.empty()){
     return 0;
@@ -4011,11 +4015,11 @@ static int check_for_aws_format(const kvmap_t& kvmap)
     return 0;
   }
   if(kvmap.end() == kvmap.find(str1) || kvmap.end() == kvmap.find(str2)){
-    S3FS_PRN_EXIT("AWSAccesskey or AWSSecretkey is not specified.");
+    OSSFS_PRN_EXIT("OSSAccesskey or OSSSecretkey is not specified.");
     return -1;
   }
-  if(!S3fsCurl::SetAccessKey(kvmap.at(str1).c_str(), kvmap.at(str2).c_str())){
-    S3FS_PRN_EXIT("failed to set access key/secret key.");
+  if(!OSSfsCurl::SetAccessKey(kvmap.at(str1).c_str(), kvmap.at(str2).c_str())){
+    OSSFS_PRN_EXIT("failed to set access key/secret key.");
     return -1;
   }
   return 1;
@@ -4038,7 +4042,7 @@ static int check_passwd_file_perms()
 
   // let's get the file info
   if(stat(passwd_file.c_str(), &info) != 0){
-    S3FS_PRN_EXIT("unexpected error from stat(%s).", passwd_file.c_str());
+    OSSFS_PRN_EXIT("unexpected error from stat(%s).", passwd_file.c_str());
     return EXIT_FAILURE;
   }
 
@@ -4046,34 +4050,34 @@ static int check_passwd_file_perms()
   if( (info.st_mode & S_IROTH) ||
       (info.st_mode & S_IWOTH) || 
       (info.st_mode & S_IXOTH)) {
-    S3FS_PRN_EXIT("credentials file %s should not have others permissions.", passwd_file.c_str());
+    OSSFS_PRN_EXIT("credentials file %s should not have others permissions.", passwd_file.c_str());
     return EXIT_FAILURE;
   }
 
   // Any local file should not have any group permissions 
-  // /etc/passwd-s3fs can have group permissions 
-  if(passwd_file != "/etc/passwd-s3fs"){
+  // /etc/passwd-ossfs can have group permissions 
+  if(passwd_file != "/etc/passwd-ossfs"){
     if( (info.st_mode & S_IRGRP) ||
         (info.st_mode & S_IWGRP) || 
         (info.st_mode & S_IXGRP)) {
-      S3FS_PRN_EXIT("credentials file %s should not have group permissions.", passwd_file.c_str());
+      OSSFS_PRN_EXIT("credentials file %s should not have group permissions.", passwd_file.c_str());
       return EXIT_FAILURE;
     }
   }else{
-    // "/etc/passwd-s3fs" does not allow group write.
+    // "/etc/passwd-ossfs" does not allow group write.
     if((info.st_mode & S_IWGRP)){
-      S3FS_PRN_EXIT("credentials file %s should not have group writable permissions.", passwd_file.c_str());
+      OSSFS_PRN_EXIT("credentials file %s should not have group writable permissions.", passwd_file.c_str());
       return EXIT_FAILURE;
     }
   }
   if((info.st_mode & S_IXUSR) || (info.st_mode & S_IXGRP)){
-    S3FS_PRN_EXIT("credentials file %s should not have executable permissions.", passwd_file.c_str());
+    OSSFS_PRN_EXIT("credentials file %s should not have executable permissions.", passwd_file.c_str());
     return EXIT_FAILURE;
   }
   return EXIT_SUCCESS;
 }
 
-static int read_aws_credentials_file(const std::string &filename)
+static int read_oss_credentials_file(const std::string &filename)
 {
   // open passwd file
   ifstream PF(filename.c_str());
@@ -4097,7 +4101,7 @@ static int read_aws_credentials_file(const std::string &filename)
     }
 
     if(line.size() > 2 && line[0] == '[' && line[line.size() - 1] == ']') {
-      if(profile == aws_profile){
+      if(profile == oss_profile){
         break;
       }
       profile = line.substr(1, line.size() - 2);
@@ -4111,18 +4115,18 @@ static int read_aws_credentials_file(const std::string &filename)
     }
     string key   = trim(line.substr(0, pos));
     string value = trim(line.substr(pos + 1, string::npos));
-    if(key == "aws_access_key_id"){
+    if(key == "oss_access_key_id"){
       accesskey = value;
-    }else if(key == "aws_secret_access_key"){
+    }else if(key == "oss_secret_access_key"){
       secret = value;
     }
   }
 
-  if(profile != aws_profile){
+  if(profile != oss_profile){
     return EXIT_FAILURE;
   }
-  if(!S3fsCurl::SetAccessKey(accesskey.c_str(), secret.c_str())){
-    S3FS_PRN_EXIT("failed to set internal data for access key/secret key from aws credential file.");
+  if(!OSSfsCurl::SetAccessKey(accesskey.c_str(), secret.c_str())){
+    OSSFS_PRN_EXIT("failed to set internal data for access key/secret key from oss credential file.");
     return EXIT_FAILURE;
   }
   return EXIT_SUCCESS;
@@ -4169,8 +4173,8 @@ static int read_passwd_file()
   // check key=value type format.
   //
   if(bucketmap.end() != bucketmap.find(keyval_fields_type)){
-    // aws format
-    result = check_for_aws_format(bucketmap[keyval_fields_type]);
+    // oss format
+    result = check_for_oss_format(bucketmap[keyval_fields_type]);
     if(-1 == result){
        return EXIT_FAILURE;
     }else if(1 == result){
@@ -4184,16 +4188,16 @@ static int read_passwd_file()
     bucket_key = bucket;
   }
   if(bucketmap.end() == bucketmap.find(bucket_key)){
-    S3FS_PRN_EXIT("Not found access key/secret key in passwd file.");
+    OSSFS_PRN_EXIT("Not found access key/secret key in passwd file.");
     return EXIT_FAILURE;
   }
   keyval = bucketmap[bucket_key];
-  if(keyval.end() == keyval.find(string(aws_accesskeyid)) || keyval.end() == keyval.find(string(aws_secretkey))){
-    S3FS_PRN_EXIT("Not found access key/secret key in passwd file.");
+  if(keyval.end() == keyval.find(string(oss_accesskeyid)) || keyval.end() == keyval.find(string(oss_secretkey))){
+    OSSFS_PRN_EXIT("Not found access key/secret key in passwd file.");
     return EXIT_FAILURE;
   }
-  if(!S3fsCurl::SetAccessKey(keyval.at(string(aws_accesskeyid)).c_str(), keyval.at(string(aws_secretkey)).c_str())){
-    S3FS_PRN_EXIT("failed to set internal data for access key/secret key from passwd file.");
+  if(!OSSfsCurl::SetAccessKey(keyval.at(string(oss_accesskeyid)).c_str(), keyval.at(string(oss_secretkey)).c_str())){
+    OSSFS_PRN_EXIT("failed to set internal data for access key/secret key from passwd file.");
     return EXIT_FAILURE;
   }
   return EXIT_SUCCESS;
@@ -4211,15 +4215,15 @@ static int read_passwd_file()
 // 1 - from the command line  (security risk)
 // 2 - from a password file specified on the command line
 // 3 - from environment variables
-// 3a - from the AWS_CREDENTIAL_FILE environment variable
-// 3b - from ${HOME}/.aws/credentials
-// 4 - from the users ~/.passwd-s3fs
-// 5 - from /etc/passwd-s3fs
+// 3a - from the OSS_CREDENTIAL_FILE environment variable
+// 3b - from ${HOME}/.oss/credentials
+// 4 - from the users ~/.passwd-ossfs
+// 5 - from /etc/passwd-ossfs
 //
 static int get_access_keys()
 {
   // should be redundant
-  if(S3fsCurl::IsPublicBucket()){
+  if(OSSfsCurl::IsPublicBucket()){
      return EXIT_SUCCESS;
   }
 
@@ -4229,7 +4233,7 @@ static int get_access_keys()
   }
 
   // 1 - keys specified on the command line
-  if(S3fsCurl::IsSetAccessKeys()){
+  if(OSSfsCurl::IsSetAccessKeys()){
      return EXIT_SUCCESS;
   }
 
@@ -4240,50 +4244,50 @@ static int get_access_keys()
        PF.close();
        return read_passwd_file();
     }else{
-      S3FS_PRN_EXIT("specified passwd_file is not readable.");
+      OSSFS_PRN_EXIT("specified passwd_file is not readable.");
       return EXIT_FAILURE;
     }
   }
 
   // 3  - environment variables
-  char* AWSACCESSKEYID     = getenv("AWSACCESSKEYID");
-  char* AWSSECRETACCESSKEY = getenv("AWSSECRETACCESSKEY");
-  if(AWSACCESSKEYID != NULL || AWSSECRETACCESSKEY != NULL){
-    if( (AWSACCESSKEYID == NULL && AWSSECRETACCESSKEY != NULL) ||
-        (AWSACCESSKEYID != NULL && AWSSECRETACCESSKEY == NULL) ){
-      S3FS_PRN_EXIT("if environment variable AWSACCESSKEYID is set then AWSSECRETACCESSKEY must be set too.");
+  char* OSSACCESSKEYID     = getenv("OSSACCESSKEYID");
+  char* OSSSECRETACCESSKEY = getenv("OSSSECRETACCESSKEY");
+  if(OSSACCESSKEYID != NULL || OSSSECRETACCESSKEY != NULL){
+    if( (OSSACCESSKEYID == NULL && OSSSECRETACCESSKEY != NULL) ||
+        (OSSACCESSKEYID != NULL && OSSSECRETACCESSKEY == NULL) ){
+      OSSFS_PRN_EXIT("if environment variable OSSACCESSKEYID is set then OSSSECRETACCESSKEY must be set too.");
       return EXIT_FAILURE;
     }
-    if(!S3fsCurl::SetAccessKey(AWSACCESSKEYID, AWSSECRETACCESSKEY)){
-      S3FS_PRN_EXIT("if one access key is specified, both keys need to be specified.");
+    if(!OSSfsCurl::SetAccessKey(OSSACCESSKEYID, OSSSECRETACCESSKEY)){
+      OSSFS_PRN_EXIT("if one access key is specified, both keys need to be specified.");
       return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;
   }
 
-  // 3a - from the AWS_CREDENTIAL_FILE environment variable
-  char * AWS_CREDENTIAL_FILE;
-  AWS_CREDENTIAL_FILE = getenv("AWS_CREDENTIAL_FILE");
-  if(AWS_CREDENTIAL_FILE != NULL){
-    passwd_file.assign(AWS_CREDENTIAL_FILE);
+  // 3a - from the OSS_CREDENTIAL_FILE environment variable
+  char * OSS_CREDENTIAL_FILE;
+  OSS_CREDENTIAL_FILE = getenv("OSS_CREDENTIAL_FILE");
+  if(OSS_CREDENTIAL_FILE != NULL){
+    passwd_file.assign(OSS_CREDENTIAL_FILE);
     if(!passwd_file.empty()){
       ifstream PF(passwd_file.c_str());
       if(PF.good()){
          PF.close();
          return read_passwd_file();
       }else{
-        S3FS_PRN_EXIT("AWS_CREDENTIAL_FILE: \"%s\" is not readable.", passwd_file.c_str());
+        OSSFS_PRN_EXIT("OSS_CREDENTIAL_FILE: \"%s\" is not readable.", passwd_file.c_str());
         return EXIT_FAILURE;
       }
     }
   }
 
-  // 3b - check ${HOME}/.aws/credentials
-  std::string aws_credentials = std::string(getpwuid(getuid())->pw_dir) + "/.aws/credentials";
-  if(read_aws_credentials_file(aws_credentials) == EXIT_SUCCESS) {
+  // 3b - check ${HOME}/.oss/credentials
+  std::string oss_credentials = std::string(getpwuid(getuid())->pw_dir) + "/.oss/credentials";
+  if(read_oss_credentials_file(oss_credentials) == EXIT_SUCCESS) {
     return EXIT_SUCCESS;
-  }else if(aws_profile != "default"){
-    S3FS_PRN_EXIT("Could not find profile: %s in file: %s", aws_profile.c_str(), aws_credentials.c_str());
+  }else if(oss_profile != "default"){
+    OSSFS_PRN_EXIT("Could not find profile: %s in file: %s", oss_profile.c_str(), oss_credentials.c_str());
     return EXIT_FAILURE;
   }
 
@@ -4292,7 +4296,7 @@ static int get_access_keys()
   HOME = getenv ("HOME");
   if(HOME != NULL){
      passwd_file.assign(HOME);
-     passwd_file.append("/.passwd-s3fs");
+     passwd_file.append("/.passwd-ossfs");
      ifstream PF(passwd_file.c_str());
      if(PF.good()){
        PF.close();
@@ -4302,20 +4306,20 @@ static int get_access_keys()
        // It is possible that the user's file was there but
        // contained no key pairs i.e. commented out
        // in that case, go look in the final location
-       if(S3fsCurl::IsSetAccessKeys()){
+       if(OSSfsCurl::IsSetAccessKeys()){
           return EXIT_SUCCESS;
        }
      }
    }
 
   // 5 - from the system default location
-  passwd_file.assign("/etc/passwd-s3fs"); 
+  passwd_file.assign("/etc/passwd-ossfs"); 
   ifstream PF(passwd_file.c_str());
   if(PF.good()){
     PF.close();
     return read_passwd_file();
   }
-  S3FS_PRN_EXIT("could not determine how to establish security credentials.");
+  OSSFS_PRN_EXIT("could not determine how to establish security credentials.");
 
   return EXIT_FAILURE;
 }
@@ -4329,7 +4333,7 @@ static int set_mountpoint_attribute(struct stat& mpst)
   mp_gid  = getegid();
   mp_mode = S_IFDIR | (allow_other ? (is_mp_umask ? (~mp_umask & (S_IRWXU | S_IRWXG | S_IRWXO)) : (S_IRWXU | S_IRWXG | S_IRWXO)) : S_IRWXU);
 
-  S3FS_PRN_INFO2("PROC(uid=%u, gid=%u) - MountPoint(uid=%u, gid=%u, mode=%04o)",
+  OSSFS_PRN_INFO2("PROC(uid=%u, gid=%u) - MountPoint(uid=%u, gid=%u, mode=%04o)",
          (unsigned int)mp_uid, (unsigned int)mp_gid, (unsigned int)(mpst.st_uid), (unsigned int)(mpst.st_gid), mpst.st_mode);
 
   // check owner
@@ -4357,14 +4361,14 @@ static int set_bucket(const char* arg)
   char *bucket_name = (char*)arg;
   if(strstr(arg, ":")){
     if(strstr(arg, "://")){
-      S3FS_PRN_EXIT("bucket name and path(\"%s\") is wrong, it must be \"bucket[:/path]\".", arg);
+      OSSFS_PRN_EXIT("bucket name and path(\"%s\") is wrong, it must be \"bucket[:/path]\".", arg);
       return -1;
     }
     bucket = strtok(bucket_name, ":");
     char* pmount_prefix = strtok(NULL, "");
     if(pmount_prefix){
       if(0 == strlen(pmount_prefix) || '/' != pmount_prefix[0]){
-        S3FS_PRN_EXIT("path(%s) must be prefix \"/\".", pmount_prefix);
+        OSSFS_PRN_EXIT("path(%s) must be prefix \"/\".", pmount_prefix);
         return -1;
       }
       mount_prefix = pmount_prefix;
@@ -4397,7 +4401,7 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
       }
       return 0;
     }
-    else if (!strcmp(arg, "s3fs")) {
+    else if (!strcmp(arg, "ossfs")) {
       return 0;
     }
 
@@ -4408,15 +4412,15 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
       struct stat stbuf;
 
       if(stat(arg, &stbuf) == -1){
-        S3FS_PRN_EXIT("unable to access MOUNTPOINT %s: %s", mountpoint.c_str(), strerror(errno));
+        OSSFS_PRN_EXIT("unable to access MOUNTPOINT %s: %s", mountpoint.c_str(), strerror(errno));
         return -1;
       }
       if(!(S_ISDIR(stbuf.st_mode))){
-        S3FS_PRN_EXIT("MOUNTPOINT: %s is not a directory.", mountpoint.c_str());
+        OSSFS_PRN_EXIT("MOUNTPOINT: %s is not a directory.", mountpoint.c_str());
         return -1;
       }
       if(!set_mountpoint_attribute(stbuf)){
-        S3FS_PRN_EXIT("MOUNTPOINT: %s permission denied.", mountpoint.c_str());
+        OSSFS_PRN_EXIT("MOUNTPOINT: %s permission denied.", mountpoint.c_str());
         return -1;
       }
 
@@ -4424,13 +4428,13 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
         struct dirent *ent;
         DIR *dp = opendir(mountpoint.c_str());
         if(dp == NULL){
-          S3FS_PRN_EXIT("failed to open MOUNTPOINT: %s: %s", mountpoint.c_str(), strerror(errno));
+          OSSFS_PRN_EXIT("failed to open MOUNTPOINT: %s: %s", mountpoint.c_str(), strerror(errno));
           return -1;
         }
         while((ent = readdir(dp)) != NULL){
           if(strcmp(ent->d_name, ".") != 0 && strcmp(ent->d_name, "..") != 0){
             closedir(dp);
-            S3FS_PRN_EXIT("MOUNTPOINT directory %s is not empty. if you are sure this is safe, can use the 'nonempty' mount option.", mountpoint.c_str());
+            OSSFS_PRN_EXIT("MOUNTPOINT directory %s is not empty. if you are sure this is safe, can use the 'nonempty' mount option.", mountpoint.c_str());
             return -1;
           }
         }
@@ -4441,35 +4445,35 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
 
     // Unknown option
     if(NO_UTILITY_MODE == utility_mode){
-      S3FS_PRN_EXIT("specified unknown third option(%s).", arg);
+      OSSFS_PRN_EXIT("specified unknown third option(%s).", arg);
     }else{
-      S3FS_PRN_EXIT("specified unknown second option(%s). you don't need to specify second option(mountpoint) for utility mode(-u).", arg);
+      OSSFS_PRN_EXIT("specified unknown second option(%s). you don't need to specify second option(mountpoint) for utility mode(-u).", arg);
     }
     return -1;
 
   }else if(key == FUSE_OPT_KEY_OPT){
     if(0 == STR2NCMP(arg, "uid=")){
-      s3fs_uid = get_uid(strchr(arg, '=') + sizeof(char));
-      if(0 != geteuid() && 0 == s3fs_uid){
-        S3FS_PRN_EXIT("root user can only specify uid=0.");
+      ossfs_uid = get_uid(strchr(arg, '=') + sizeof(char));
+      if(0 != geteuid() && 0 == ossfs_uid){
+        OSSFS_PRN_EXIT("root user can only specify uid=0.");
         return -1;
       }
-      is_s3fs_uid = true;
+      is_ossfs_uid = true;
       return 1; // continue for fuse option
     }
     if(0 == STR2NCMP(arg, "gid=")){
-      s3fs_gid = get_gid(strchr(arg, '=') + sizeof(char));
-      if(0 != getegid() && 0 == s3fs_gid){
-        S3FS_PRN_EXIT("root user can only specify gid=0.");
+      ossfs_gid = get_gid(strchr(arg, '=') + sizeof(char));
+      if(0 != getegid() && 0 == ossfs_gid){
+        OSSFS_PRN_EXIT("root user can only specify gid=0.");
         return -1;
       }
-      is_s3fs_gid = true;
+      is_ossfs_gid = true;
       return 1; // continue for fuse option
     }
     if(0 == STR2NCMP(arg, "umask=")){
-      s3fs_umask = strtol(strchr(arg, '=') + sizeof(char), NULL, 0);
-      s3fs_umask &= (S_IRWXU | S_IRWXG | S_IRWXO);
-      is_s3fs_umask = true;
+      ossfs_umask = strtol(strchr(arg, '=') + sizeof(char), NULL, 0);
+      ossfs_umask &= (S_IRWXU | S_IRWXG | S_IRWXO);
+      is_ossfs_umask = true;
       return 1; // continue for fuse option
     }
     if(0 == strcmp(arg, "allow_other")){
@@ -4484,11 +4488,11 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
     }
     if(0 == STR2NCMP(arg, "default_acl=")){
       const char* acl = strchr(arg, '=') + sizeof(char);
-      S3fsCurl::SetDefaultAcl(acl);
+      OSSfsCurl::SetDefaultAcl(acl);
       return 0;
     }
     if(0 == STR2NCMP(arg, "retries=")){
-      S3fsCurl::SetRetries(static_cast<int>(s3fs_strtoofft(strchr(arg, '=') + sizeof(char))));
+      OSSfsCurl::SetRetries(static_cast<int>(ossfs_strtoofft(strchr(arg, '=') + sizeof(char))));
       return 0;
     }
     if(0 == STR2NCMP(arg, "use_cache=")){
@@ -4504,8 +4508,8 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
       return 0;
     }
     if(0 == STR2NCMP(arg, "multireq_max=")){
-      long maxreq = static_cast<long>(s3fs_strtoofft(strchr(arg, '=') + sizeof(char)));
-      S3fsCurl::SetMaxMultiRequest(maxreq);
+      long maxreq = static_cast<long>(ossfs_strtoofft(strchr(arg, '=') + sizeof(char)));
+      OSSfsCurl::SetMaxMultiRequest(maxreq);
       return 0;
     }
     if(0 == strcmp(arg, "nonempty")){
@@ -4518,77 +4522,83 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
     }
     // old format for storage_class
     if(0 == strcmp(arg, "use_rrs") || 0 == STR2NCMP(arg, "use_rrs=")){
-      off_t rrs = 1;
-      // for an old format.
-      if(0 == STR2NCMP(arg, "use_rrs=")){
-        rrs = s3fs_strtoofft(strchr(arg, '=') + sizeof(char));
-      }
-      if(0 == rrs){
-        S3fsCurl::SetStorageClass(STANDARD);
-      }else if(1 == rrs){
-        S3fsCurl::SetStorageClass(REDUCED_REDUNDANCY);
-      }else{
-        S3FS_PRN_EXIT("poorly formed argument to option: use_rrs");
-        return -1;
-      }
-      return 0;
+      OSSFS_PRN_EXIT("use_rrs is not supported, coming soon.");
+      return -1;
+      // TODO: storage_class
+      // off_t rrs = 1;
+      // // for an old format.
+      // if(0 == STR2NCMP(arg, "use_rrs=")){
+      //   rrs = ossfs_strtoofft(strchr(arg, '=') + sizeof(char));
+      // }
+      // if(0 == rrs){
+      //   OSSfsCurl::SetStorageClass(STANDARD);
+      // }else if(1 == rrs){
+      //   OSSfsCurl::SetStorageClass(REDUCED_REDUNDANCY);
+      // }else{
+      //   OSSFS_PRN_EXIT("poorly formed argument to option: use_rrs");
+      //   return -1;
+      // }
+      // return 0;
     }
     if(0 == STR2NCMP(arg, "storage_class=")){
-      const char *storage_class = strchr(arg, '=') + sizeof(char);
-      if(0 == strcmp(storage_class, "standard")){
-        S3fsCurl::SetStorageClass(STANDARD);
-      }else if(0 == strcmp(storage_class, "standard_ia")){
-        S3fsCurl::SetStorageClass(STANDARD_IA);
-      }else if(0 == strcmp(storage_class, "onezone_ia")){
-        S3fsCurl::SetStorageClass(ONEZONE_IA);
-      }else if(0 == strcmp(storage_class, "reduced_redundancy")){
-        S3fsCurl::SetStorageClass(REDUCED_REDUNDANCY);
-      }else{
-        S3FS_PRN_EXIT("unknown value for storage_class: %s", storage_class);
-        return -1;
-      }
-      return 0;
+      OSSFS_PRN_EXIT("storage_class is not supported, coming soon.");
+      return -1;
+      // TODO: storage_class
+      // const char *storage_class = strchr(arg, '=') + sizeof(char);
+      // if(0 == strcmp(storage_class, "standard")){
+      //   OSSfsCurl::SetStorageClass(STANDARD);
+      // }else if(0 == strcmp(storage_class, "standard_ia")){
+      //   OSSfsCurl::SetStorageClass(STANDARD_IA);
+      // }else if(0 == strcmp(storage_class, "onezone_ia")){
+      //   OSSfsCurl::SetStorageClass(ONEZONE_IA);
+      // }else if(0 == strcmp(storage_class, "reduced_redundancy")){
+      //   OSSfsCurl::SetStorageClass(REDUCED_REDUNDANCY);
+      // }else{
+      //   OSSFS_PRN_EXIT("unknown value for storage_class: %s", storage_class);
+      //   return -1;
+      // }
+      // return 0;
     }
     //
     // [NOTE]
-    // use_sse                        Set Server Side Encrypting type to SSE-S3
+    // use_sse                        Set Server Side Encrypting type to SSE-OSS
     // use_sse=1
     // use_sse=file                   Set Server Side Encrypting type to Custom key(SSE-C) and load custom keys
     // use_sse=custom(c):file
     // use_sse=custom(c)              Set Server Side Encrypting type to Custom key(SSE-C)
-    // use_sse=kmsid(k):kms-key-id    Set Server Side Encrypting type to AWS Key Management key id(SSE-KMS) and load KMS id
-    // use_sse=kmsid(k)               Set Server Side Encrypting type to AWS Key Management key id(SSE-KMS)
+    // use_sse=kmsid(k):kms-key-id    Set Server Side Encrypting type to OSS Key Management key id(SSE-KMS) and load KMS id
+    // use_sse=kmsid(k)               Set Server Side Encrypting type to OSS Key Management key id(SSE-KMS)
     //
     // load_sse_c=file                Load Server Side Encrypting custom keys
     //
-    // AWSSSECKEYS                    Loading Environment for Server Side Encrypting custom keys
-    // AWSSSEKMSID                    Loading Environment for Server Side Encrypting Key id
+    // OSSSSECKEYS                    Loading Environment for Server Side Encrypting custom keys
+    // OSSSSEKMSID                    Loading Environment for Server Side Encrypting Key id
     //
     if(0 == STR2NCMP(arg, "use_sse")){
       if(0 == strcmp(arg, "use_sse") || 0 == strcmp(arg, "use_sse=1")){ // use_sse=1 is old type parameter
-        // sse type is SSE_S3
-        if(!S3fsCurl::IsSseDisable() && !S3fsCurl::IsSseS3Type()){
-          S3FS_PRN_EXIT("already set SSE another type, so conflict use_sse option or environment.");
+        // sse type is SSE_OSS
+        if(!OSSfsCurl::IsSseDisable() && !OSSfsCurl::IsSseOSSType()){
+          OSSFS_PRN_EXIT("already set SSE another type, so conflict use_sse option or environment.");
           return -1;
         }
-        S3fsCurl::SetSseType(SSE_S3);
+        OSSfsCurl::SetSseType(SSE_OSS);
 
       }else if(0 == strcmp(arg, "use_sse=kmsid") || 0 == strcmp(arg, "use_sse=k")){
         // sse type is SSE_KMS with out kmsid(expecting id is loaded by environment)
-        if(!S3fsCurl::IsSseDisable() && !S3fsCurl::IsSseKmsType()){
-          S3FS_PRN_EXIT("already set SSE another type, so conflict use_sse option or environment.");
+        if(!OSSfsCurl::IsSseDisable() && !OSSfsCurl::IsSseKmsType()){
+          OSSFS_PRN_EXIT("already set SSE another type, so conflict use_sse option or environment.");
           return -1;
         }
-        if(!S3fsCurl::IsSetSseKmsId()){
-          S3FS_PRN_EXIT("use_sse=kms but not loaded kms id by environment.");
+        if(!OSSfsCurl::IsSetSseKmsId()){
+          OSSFS_PRN_EXIT("use_sse=kms but not loaded kms id by environment.");
           return -1;
         }
-        S3fsCurl::SetSseType(SSE_KMS);
+        OSSfsCurl::SetSseType(SSE_KMS);
 
       }else if(0 == STR2NCMP(arg, "use_sse=kmsid:") || 0 == STR2NCMP(arg, "use_sse=k:")){
         // sse type is SSE_KMS with kmsid
-        if(!S3fsCurl::IsSseDisable() && !S3fsCurl::IsSseKmsType()){
-          S3FS_PRN_EXIT("already set SSE another type, so conflict use_sse option or environment.");
+        if(!OSSfsCurl::IsSseDisable() && !OSSfsCurl::IsSseKmsType()){
+          OSSFS_PRN_EXIT("already set SSE another type, so conflict use_sse option or environment.");
           return -1;
         }
         const char* kmsid;
@@ -4597,27 +4607,27 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
         }else{
           kmsid = &arg[strlen("use_sse=k:")];
         }
-        if(!S3fsCurl::SetSseKmsid(kmsid)){
-          S3FS_PRN_EXIT("failed to load use_sse kms id.");
+        if(!OSSfsCurl::SetSseKmsid(kmsid)){
+          OSSFS_PRN_EXIT("failed to load use_sse kms id.");
           return -1;
         }
-        S3fsCurl::SetSseType(SSE_KMS);
+        OSSfsCurl::SetSseType(SSE_KMS);
 
       }else if(0 == strcmp(arg, "use_sse=custom") || 0 == strcmp(arg, "use_sse=c")){
         // sse type is SSE_C with out custom keys(expecting keys are loaded by environment or load_sse_c option)
-        if(!S3fsCurl::IsSseDisable() && !S3fsCurl::IsSseCType()){
-          S3FS_PRN_EXIT("already set SSE another type, so conflict use_sse option or environment.");
+        if(!OSSfsCurl::IsSseDisable() && !OSSfsCurl::IsSseCType()){
+          OSSFS_PRN_EXIT("already set SSE another type, so conflict use_sse option or environment.");
           return -1;
         }
         // [NOTE]
         // do not check ckeys exists here.
         //
-        S3fsCurl::SetSseType(SSE_C);
+        OSSfsCurl::SetSseType(SSE_C);
 
       }else if(0 == STR2NCMP(arg, "use_sse=custom:") || 0 == STR2NCMP(arg, "use_sse=c:")){
         // sse type is SSE_C with custom keys
-        if(!S3fsCurl::IsSseDisable() && !S3fsCurl::IsSseCType()){
-          S3FS_PRN_EXIT("already set SSE another type, so conflict use_sse option or environment.");
+        if(!OSSfsCurl::IsSseDisable() && !OSSfsCurl::IsSseCType()){
+          OSSFS_PRN_EXIT("already set SSE another type, so conflict use_sse option or environment.");
           return -1;
         }
         const char* ssecfile;
@@ -4626,24 +4636,24 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
         }else{
           ssecfile = &arg[strlen("use_sse=c:")];
         }
-        if(!S3fsCurl::SetSseCKeys(ssecfile)){
-          S3FS_PRN_EXIT("failed to load use_sse custom key file(%s).", ssecfile);
+        if(!OSSfsCurl::SetSseCKeys(ssecfile)){
+          OSSFS_PRN_EXIT("failed to load use_sse custom key file(%s).", ssecfile);
           return -1;
         }
-        S3fsCurl::SetSseType(SSE_C);
+        OSSfsCurl::SetSseType(SSE_C);
 
       }else if(0 == strcmp(arg, "use_sse=")){    // this type is old style(parameter is custom key file path)
         // SSE_C with custom keys.
         const char* ssecfile = &arg[strlen("use_sse=")];
-        if(!S3fsCurl::SetSseCKeys(ssecfile)){
-          S3FS_PRN_EXIT("failed to load use_sse custom key file(%s).", ssecfile);
+        if(!OSSfsCurl::SetSseCKeys(ssecfile)){
+          OSSFS_PRN_EXIT("failed to load use_sse custom key file(%s).", ssecfile);
           return -1;
         }
-        S3fsCurl::SetSseType(SSE_C);
+        OSSfsCurl::SetSseType(SSE_C);
 
       }else{
         // never come here.
-        S3FS_PRN_EXIT("something wrong use_sse option.");
+        OSSFS_PRN_EXIT("something wrong use_sse option.");
         return -1;
       }
       return 0;
@@ -4652,16 +4662,16 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
     // Do only load SSE custom keys, care for set without set sse type.
     if(0 == STR2NCMP(arg, "load_sse_c=")){
       const char* ssecfile = &arg[strlen("load_sse_c=")];
-      if(!S3fsCurl::SetSseCKeys(ssecfile)){
-        S3FS_PRN_EXIT("failed to load use_sse custom key file(%s).", ssecfile);
+      if(!OSSfsCurl::SetSseCKeys(ssecfile)){
+        OSSFS_PRN_EXIT("failed to load use_sse custom key file(%s).", ssecfile);
         return -1;
       }
       return 0;
     }
     if(0 == STR2NCMP(arg, "ssl_verify_hostname=")){
-      long sslvh = static_cast<long>(s3fs_strtoofft(strchr(arg, '=') + sizeof(char)));
-      if(-1 == S3fsCurl::SetSslVerifyHostname(sslvh)){
-        S3FS_PRN_EXIT("poorly formed argument to option: ssl_verify_hostname.");
+      long sslvh = static_cast<long>(ossfs_strtoofft(strchr(arg, '=') + sizeof(char)));
+      if(-1 == OSSfsCurl::SetSslVerifyHostname(sslvh)){
+        OSSFS_PRN_EXIT("poorly formed argument to option: ssl_verify_hostname.");
         return -1;
       }
       return 0;
@@ -4670,73 +4680,73 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
       passwd_file = strchr(arg, '=') + sizeof(char);
       return 0;
     }
-    if(0 == strcmp(arg, "ibm_iam_auth")){
-      S3fsCurl::SetIsIBMIAMAuth(true);
-      S3fsCurl::SetIAMCredentialsURL("https://iam.bluemix.net/oidc/token");
-      S3fsCurl::SetIAMTokenField("access_token");
-      S3fsCurl::SetIAMExpiryField("expiration");
-      S3fsCurl::SetIAMFieldCount(2);
-      is_ibm_iam_auth = true;
-      return 0;
-    }
-    if(0 == STR2NCMP(arg, "ibm_iam_endpoint=")){
-      std::string endpoint_url;
-      std::string iam_endpoint = strchr(arg, '=') + sizeof(char);
-      // Check url for http / https protocol string
-      if((iam_endpoint.compare(0, 8, "https://") != 0) && (iam_endpoint.compare(0, 7, "http://") != 0)) {
-         S3FS_PRN_EXIT("option ibm_iam_endpoint has invalid format, missing http / https protocol");
-         return -1;
-      }
-      endpoint_url = iam_endpoint + "/oidc/token";
-      S3fsCurl::SetIAMCredentialsURL(endpoint_url.c_str());
-      return 0;
-    }
-    if(0 == strcmp(arg, "ecs")){
-      if (is_ibm_iam_auth) {
-        S3FS_PRN_EXIT("option ecs cannot be used in conjunction with ibm");
-        return -1;
-      }
-      S3fsCurl::SetIsECS(true);
-      S3fsCurl::SetIAMCredentialsURL("http://169.254.170.2");
-      S3fsCurl::SetIAMFieldCount(5);
-      is_ecs = true;
-      return 0;
-    }
-    if(0 == STR2NCMP(arg, "iam_role")){
-      if (is_ecs || is_ibm_iam_auth) {
-        S3FS_PRN_EXIT("option iam_role cannot be used in conjunction with ecs or ibm");
-        return -1;
-      }
-      if(0 == strcmp(arg, "iam_role") || 0 == strcmp(arg, "iam_role=auto")){
-        // loading IAM role name in s3fs_init(), because we need to wait initializing curl.
-        //
-        load_iamrole = true;
-        return 0;
+    // if(0 == strcmp(arg, "ibm_iam_auth")){
+    //   OSSfsCurl::SetIsIBMIAMAuth(true);
+    //   OSSfsCurl::SetIAMCredentialsURL("https://iam.bluemix.net/oidc/token");
+    //   OSSfsCurl::SetIAMTokenField("access_token");
+    //   OSSfsCurl::SetIAMExpiryField("expiration");
+    //   OSSfsCurl::SetIAMFieldCount(2);
+    //   is_ibm_iam_auth = true;
+    //   return 0;
+    // }
+    // if(0 == STR2NCMP(arg, "ibm_iam_endpoint=")){
+    //   std::string endpoint_url;
+    //   std::string iam_endpoint = strchr(arg, '=') + sizeof(char);
+    //   // Check url for http / https protocol string
+    //   if((iam_endpoint.compare(0, 8, "https://") != 0) && (iam_endpoint.compare(0, 7, "http://") != 0)) {
+    //      OSSFS_PRN_EXIT("option ibm_iam_endpoint has invalid format, missing http / https protocol");
+    //      return -1;
+    //   }
+    //   endpoint_url = iam_endpoint + "/oidc/token";
+    //   OSSfsCurl::SetIAMCredentialsURL(endpoint_url.c_str());
+    //   return 0;
+    // }
+    // if(0 == strcmp(arg, "ecs")){
+    //   if (is_ibm_iam_auth) {
+    //     OSSFS_PRN_EXIT("option ecs cannot be used in conjunction with ibm");
+    //     return -1;
+    //   }
+    //   OSSfsCurl::SetIsECS(true);
+    //   OSSfsCurl::SetIAMCredentialsURL("http://169.254.170.2");
+    //   OSSfsCurl::SetIAMFieldCount(5);
+    //   is_ecs = true;
+    //   return 0;
+    // }
+    // if(0 == STR2NCMP(arg, "iam_role")){
+    //   if (is_ecs || is_ibm_iam_auth) {
+    //     OSSFS_PRN_EXIT("option iam_role cannot be used in conjunction with ecs or ibm");
+    //     return -1;
+    //   }
+    //   if(0 == strcmp(arg, "iam_role") || 0 == strcmp(arg, "iam_role=auto")){
+    //     // loading IAM role name in ossfs_init(), because we need to wait initializing curl.
+    //     //
+    //     load_iamrole = true;
+    //     return 0;
 
-      }else if(0 == STR2NCMP(arg, "iam_role=")){
-        const char* role = strchr(arg, '=') + sizeof(char);
-        S3fsCurl::SetIAMRole(role);
-        load_iamrole = false;
-        return 0;
-      }
-    }
+    //   }else if(0 == STR2NCMP(arg, "iam_role=")){
+    //     const char* role = strchr(arg, '=') + sizeof(char);
+    //     OSSfsCurl::SetIAMRole(role);
+    //     load_iamrole = false;
+    //     return 0;
+    //   }
+    // }
     if(0 == STR2NCMP(arg, "profile=")){
-      aws_profile = strchr(arg, '=') + sizeof(char);
+      oss_profile = strchr(arg, '=') + sizeof(char);
       return 0;
     }
     if(0 == STR2NCMP(arg, "public_bucket=")){
-      off_t pubbucket = s3fs_strtoofft(strchr(arg, '=') + sizeof(char));
+      off_t pubbucket = ossfs_strtoofft(strchr(arg, '=') + sizeof(char));
       if(1 == pubbucket){
-        S3fsCurl::SetPublicBucket(true);
+        OSSfsCurl::SetPublicBucket(true);
         // [NOTE]
-        // if bucket is public(without credential), s3 do not allow copy api.
-        // so s3fs sets nocopyapi mode.
+        // if bucket is public(without credential), oss do not allow copy api.
+        // so ossfs sets nocopyapi mode.
         //
         nocopyapi = true;
       }else if(0 == pubbucket){
-        S3fsCurl::SetPublicBucket(false);
+        OSSfsCurl::SetPublicBucket(false);
       }else{
-        S3FS_PRN_EXIT("poorly formed argument to option: public_bucket.");
+        OSSFS_PRN_EXIT("poorly formed argument to option: public_bucket.");
         return -1;
       }
       return 0;
@@ -4757,42 +4767,42 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
       return 0;
     }
     if(0 == strcmp(arg, "no_check_certificate")){
-        S3fsCurl::SetCheckCertificate(false);
+        OSSfsCurl::SetCheckCertificate(false);
         return 0;
     }
     if(0 == STR2NCMP(arg, "connect_timeout=")){
-      long contimeout = static_cast<long>(s3fs_strtoofft(strchr(arg, '=') + sizeof(char)));
-      S3fsCurl::SetConnectTimeout(contimeout);
+      long contimeout = static_cast<long>(ossfs_strtoofft(strchr(arg, '=') + sizeof(char)));
+      OSSfsCurl::SetConnectTimeout(contimeout);
       return 0;
     }
     if(0 == STR2NCMP(arg, "readwrite_timeout=")){
-      time_t rwtimeout = static_cast<time_t>(s3fs_strtoofft(strchr(arg, '=') + sizeof(char)));
-      S3fsCurl::SetReadwriteTimeout(rwtimeout);
+      time_t rwtimeout = static_cast<time_t>(ossfs_strtoofft(strchr(arg, '=') + sizeof(char)));
+      OSSfsCurl::SetReadwriteTimeout(rwtimeout);
       return 0;
     }
     if(0 == STR2NCMP(arg, "list_object_max_keys=")){
-      int max_keys = static_cast<int>(s3fs_strtoofft(strchr(arg, '=') + sizeof(char)));
+      int max_keys = static_cast<int>(ossfs_strtoofft(strchr(arg, '=') + sizeof(char)));
       if(max_keys < 1000){
-        S3FS_PRN_EXIT("argument should be over 1000: list_object_max_keys");
+        OSSFS_PRN_EXIT("argument should be over 1000: list_object_max_keys");
         return -1;
       }
       max_keys_list_object = max_keys;
       return 0;
     }
     if(0 == STR2NCMP(arg, "max_stat_cache_size=")){
-      unsigned long cache_size = static_cast<unsigned long>(s3fs_strtoofft(strchr(arg, '=') + sizeof(char)));
+      unsigned long cache_size = static_cast<unsigned long>(ossfs_strtoofft(strchr(arg, '=') + sizeof(char)));
       StatCache::getStatCacheData()->SetCacheSize(cache_size);
       return 0;
     }
     if(0 == STR2NCMP(arg, "stat_cache_expire=")){
-      time_t expr_time = static_cast<time_t>(s3fs_strtoofft(strchr(arg, '=') + sizeof(char)));
+      time_t expr_time = static_cast<time_t>(ossfs_strtoofft(strchr(arg, '=') + sizeof(char)));
       StatCache::getStatCacheData()->SetExpireTime(expr_time);
       return 0;
     }
     // [NOTE]
     // This option is for compatibility old version.
     if(0 == STR2NCMP(arg, "stat_cache_interval_expire=")){
-      time_t expr_time = static_cast<time_t>(s3fs_strtoofft(strchr(arg, '=') + sizeof(char)));
+      time_t expr_time = static_cast<time_t>(ossfs_strtoofft(strchr(arg, '=') + sizeof(char)));
       StatCache::getStatCacheData()->SetExpireTime(expr_time, true);
       return 0;
     }
@@ -4801,51 +4811,51 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
       return 0;
     }
     if(0 == strcmp(arg, "nodnscache")){
-      S3fsCurl::SetDnsCache(false);
+      OSSfsCurl::SetDnsCache(false);
       return 0;
     }
     if(0 == strcmp(arg, "nosscache")){
-      S3fsCurl::SetSslSessionCache(false);
+      OSSfsCurl::SetSslSessionCache(false);
       return 0;
     }
     if(0 == STR2NCMP(arg, "parallel_count=") || 0 == STR2NCMP(arg, "parallel_upload=")){
-      int maxpara = static_cast<int>(s3fs_strtoofft(strchr(arg, '=') + sizeof(char)));
+      int maxpara = static_cast<int>(ossfs_strtoofft(strchr(arg, '=') + sizeof(char)));
       if(0 >= maxpara){
-        S3FS_PRN_EXIT("argument should be over 1: parallel_count");
+        OSSFS_PRN_EXIT("argument should be over 1: parallel_count");
         return -1;
       }
-      S3fsCurl::SetMaxParallelCount(maxpara);
+      OSSfsCurl::SetMaxParallelCount(maxpara);
       return 0;
     }
     if(0 == STR2NCMP(arg, "fd_page_size=")){
-      S3FS_PRN_ERR("option fd_page_size is no longer supported, so skip this option.");
+      OSSFS_PRN_ERR("option fd_page_size is no longer supported, so skip this option.");
       return 0;
     }
     if(0 == STR2NCMP(arg, "multipart_size=")){
-      off_t size = static_cast<off_t>(s3fs_strtoofft(strchr(arg, '=') + sizeof(char)));
-      if(!S3fsCurl::SetMultipartSize(size)){
-        S3FS_PRN_EXIT("multipart_size option must be at least 5 MB.");
+      off_t size = static_cast<off_t>(ossfs_strtoofft(strchr(arg, '=') + sizeof(char)));
+      if(!OSSfsCurl::SetMultipartSize(size)){
+        OSSFS_PRN_EXIT("multipart_size option must be at least 5 MB.");
         return -1;
       }
       return 0;
     }
     if(0 == STR2NCMP(arg, "ensure_diskfree=")){
-      size_t dfsize = static_cast<size_t>(s3fs_strtoofft(strchr(arg, '=') + sizeof(char))) * 1024 * 1024;
-      if(dfsize < static_cast<size_t>(S3fsCurl::GetMultipartSize())){
-        S3FS_PRN_WARN("specified size to ensure disk free space is smaller than multipart size, so set multipart size to it.");
-        dfsize = static_cast<size_t>(S3fsCurl::GetMultipartSize());
+      size_t dfsize = static_cast<size_t>(ossfs_strtoofft(strchr(arg, '=') + sizeof(char))) * 1024 * 1024;
+      if(dfsize < static_cast<size_t>(OSSfsCurl::GetMultipartSize())){
+        OSSFS_PRN_WARN("specified size to ensure disk free space is smaller than multipart size, so set multipart size to it.");
+        dfsize = static_cast<size_t>(OSSfsCurl::GetMultipartSize());
       }
       FdManager::SetEnsureFreeDiskSpace(dfsize);
       return 0;
     }
     if(0 == STR2NCMP(arg, "singlepart_copy_limit=")){
-      singlepart_copy_limit = static_cast<int64_t>(s3fs_strtoofft(strchr(arg, '=') + sizeof(char))) * 1024;
+      singlepart_copy_limit = static_cast<int64_t>(ossfs_strtoofft(strchr(arg, '=') + sizeof(char))) * 1024;
       return 0;
     }
     if(0 == STR2NCMP(arg, "ahbe_conf=")){
       string ahbe_conf = strchr(arg, '=') + sizeof(char);
       if(!AdditionalHeader::get()->Load(ahbe_conf.c_str())){
-        S3FS_PRN_EXIT("failed to load ahbe_conf file(%s).", ahbe_conf.c_str());
+        OSSFS_PRN_EXIT("failed to load ahbe_conf file(%s).", ahbe_conf.c_str());
         return -1;
       }
       AdditionalHeader::get()->Dump();
@@ -4872,7 +4882,7 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
       return 0;
     }
     if(0 == strcmp(arg, "enable_content_md5")){
-      S3fsCurl::SetContentMd5(true);
+      OSSfsCurl::SetContentMd5(true);
       return 0;
     }
     if(0 == STR2NCMP(arg, "url=")){
@@ -4889,13 +4899,13 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
       }
       // Check url for http / https protocol string
       if((host.compare(0, 8, "https://") != 0) && (host.compare(0, 7, "http://") != 0)) {
-         S3FS_PRN_EXIT("option url has invalid format, missing http / https protocol");
+         OSSFS_PRN_EXIT("option url has invalid format, missing http / https protocol");
          return -1;
       }
       return 0;
     }
-    if(0 == strcmp(arg, "sigv2")){
-      S3fsCurl::SetSignatureV4(false);
+    if(0 == strcmp(arg, "sigv4")){
+      OSSfsCurl::SetSignatureV4(true);
       return 0;
     }
     if(0 == strcmp(arg, "createbucket")){
@@ -4912,7 +4922,7 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
       return 0;
     }
     if(0 == STR2NCMP(arg, "noua")){
-      S3fsCurl::SetUserAgentFlag(false);
+      OSSfsCurl::SetUserAgentFlag(false);
       return 0;
     }
     if(0 == strcmp(arg, "use_xattr")){
@@ -4925,7 +4935,7 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
       }else if(0 == strcmp(strflag, "0")){
         is_use_xattr = false;
       }else{
-        S3FS_PRN_EXIT("option use_xattr has unknown parameter(%s).", strflag);
+        OSSFS_PRN_EXIT("option use_xattr has unknown parameter(%s).", strflag);
         return -1;
       }
       return 0;
@@ -4940,22 +4950,22 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
       return 0;
     }
     //
-    // debug option for s3fs
+    // debug option for ossfs
     //
     if(0 == STR2NCMP(arg, "dbglevel=")){
       const char* strlevel = strchr(arg, '=') + sizeof(char);
       if(0 == strcasecmp(strlevel, "silent") || 0 == strcasecmp(strlevel, "critical") || 0 == strcasecmp(strlevel, "crit")){
-        set_s3fs_log_level(S3FS_LOG_CRIT);
+        set_ossfs_log_level(OSSFS_LOG_CRIT);
       }else if(0 == strcasecmp(strlevel, "error") || 0 == strcasecmp(strlevel, "err")){
-        set_s3fs_log_level(S3FS_LOG_ERR);
+        set_ossfs_log_level(OSSFS_LOG_ERR);
       }else if(0 == strcasecmp(strlevel, "wan") || 0 == strcasecmp(strlevel, "warn") || 0 == strcasecmp(strlevel, "warning")){
-        set_s3fs_log_level(S3FS_LOG_WARN);
+        set_ossfs_log_level(OSSFS_LOG_WARN);
       }else if(0 == strcasecmp(strlevel, "inf") || 0 == strcasecmp(strlevel, "info") || 0 == strcasecmp(strlevel, "information")){
-        set_s3fs_log_level(S3FS_LOG_INFO);
+        set_ossfs_log_level(OSSFS_LOG_INFO);
       }else if(0 == strcasecmp(strlevel, "dbg") || 0 == strcasecmp(strlevel, "debug")){
-        set_s3fs_log_level(S3FS_LOG_DBG);
+        set_ossfs_log_level(OSSFS_LOG_DBG);
       }else{
-        S3FS_PRN_EXIT("option dbglevel has unknown parameter(%s).", strlevel);
+        OSSFS_PRN_EXIT("option dbglevel has unknown parameter(%s).", strlevel);
         return -1;
       }
       return 0;
@@ -4963,11 +4973,11 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
     //
     // debug option
     //
-    // debug_level is S3FS_LOG_INFO, after second -d is passed to fuse.
+    // debug_level is OSSFS_LOG_INFO, after second -d is passed to fuse.
     //
     if(0 == strcmp(arg, "-d") || 0 == strcmp(arg, "--debug")){
-      if(!IS_S3FS_LOG_INFO() && !IS_S3FS_LOG_DBG()){
-        set_s3fs_log_level(S3FS_LOG_INFO);
+      if(!IS_OSSFS_LOG_INFO() && !IS_OSSFS_LOG_DBG()){
+        set_ossfs_log_level(OSSFS_LOG_INFO);
         return 0;
       }
       if(0 == strcmp(arg, "--debug")){
@@ -4977,22 +4987,22 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
       }
     }
     // "f2" is not used no more.
-    // (set S3FS_LOG_DBG)
+    // (set OSSFS_LOG_DBG)
     if(0 == strcmp(arg, "f2")){
-      set_s3fs_log_level(S3FS_LOG_DBG);
+      set_ossfs_log_level(OSSFS_LOG_DBG);
       return 0;
     }
     if(0 == strcmp(arg, "curldbg")){
-      S3fsCurl::SetVerbose(true);
+      OSSfsCurl::SetVerbose(true);
       return 0;
     }
 
     if(0 == STR2NCMP(arg, "accessKeyId=")){
-      S3FS_PRN_EXIT("option accessKeyId is no longer supported.");
+      OSSFS_PRN_EXIT("option accessKeyId is no longer supported.");
       return -1;
     }
     if(0 == STR2NCMP(arg, "secretAccessKey=")){
-      S3FS_PRN_EXIT("option secretAccessKey is no longer supported.");
+      OSSFS_PRN_EXIT("option secretAccessKey is no longer supported.");
       return -1;
     }
     if(0 == strcmp(arg, "use_wtf8")){
@@ -5008,7 +5018,7 @@ int main(int argc, char* argv[])
   int ch;
   int fuse_res;
   int option_index = 0; 
-  struct fuse_operations s3fs_oper;
+  struct fuse_operations ossfs_oper;
   time_t incomp_abort_time = (24 * 60 * 60);
 
   static const struct option long_opts[] = {
@@ -5021,8 +5031,8 @@ int main(int argc, char* argv[])
   };
 
   // init syslog(default CRIT)
-  openlog("s3fs", LOG_PID | LOG_ODELAY | LOG_NOWAIT, LOG_USER);
-  set_s3fs_log_level(debug_level);
+  openlog("ossfs", LOG_PID | LOG_ODELAY | LOG_NOWAIT, LOG_USER);
+  set_ossfs_log_level(debug_level);
 
   // init xml2
   xmlInitParser();
@@ -5057,14 +5067,14 @@ int main(int argc, char* argv[])
       break;
     case 'u':   // --incomplete-mpu-list
       if(NO_UTILITY_MODE != utility_mode){
-        S3FS_PRN_EXIT("already utility mode option is specified.");
+        OSSFS_PRN_EXIT("already utility mode option is specified.");
         exit(EXIT_FAILURE);
       }
       utility_mode = INCOMP_TYPE_LIST;
       break;
     case 'a':   // --incomplete-mpu-abort
       if(NO_UTILITY_MODE != utility_mode){
-        S3FS_PRN_EXIT("already utility mode option is specified.");
+        OSSFS_PRN_EXIT("already utility mode option is specified.");
         exit(EXIT_FAILURE);
       }
       utility_mode = INCOMP_TYPE_ABORT;
@@ -5074,7 +5084,7 @@ int main(int argc, char* argv[])
         incomp_abort_time = 0;
       }else if(NULL != optarg){
         if(!convert_unixtime_from_option_arg(optarg, incomp_abort_time)){
-          S3FS_PRN_EXIT("--incomplete-mpu-abort option argument is wrong.");
+          OSSFS_PRN_EXIT("--incomplete-mpu-abort option argument is wrong.");
           exit(EXIT_FAILURE);
         }
       }
@@ -5086,83 +5096,84 @@ int main(int argc, char* argv[])
   }
 
   // Load SSE environment
-  if(!S3fsCurl::LoadEnvSse()){
-    S3FS_PRN_EXIT("something wrong about SSE environment.");
+  if(!OSSfsCurl::LoadEnvSse()){
+    OSSFS_PRN_EXIT("something wrong about SSE environment.");
     exit(EXIT_FAILURE);
   }
 
   // ssl init
-  if(!s3fs_init_global_ssl()){
-    S3FS_PRN_EXIT("could not initialize for ssl libraries.");
+  if(!ossfs_init_global_ssl()){
+    OSSFS_PRN_EXIT("could not initialize for ssl libraries.");
     exit(EXIT_FAILURE);
   }
 
   // init curl
-  if(!S3fsCurl::InitS3fsCurl("/etc/mime.types")){
-    S3FS_PRN_EXIT("Could not initiate curl library.");
-    s3fs_destroy_global_ssl();
+  if(!OSSfsCurl::InitOSSfsCurl("/etc/mime.types")){
+    OSSFS_PRN_EXIT("Could not initiate curl library.");
+    ossfs_destroy_global_ssl();
     exit(EXIT_FAILURE);
   }
 
   // clear this structure
-  memset(&s3fs_oper, 0, sizeof(s3fs_oper));
+  memset(&ossfs_oper, 0, sizeof(ossfs_oper));
 
   // This is the fuse-style parser for the arguments
   // after which the bucket name and mountpoint names
   // should have been set
   struct fuse_args custom_args = FUSE_ARGS_INIT(argc, argv);
   if(0 != fuse_opt_parse(&custom_args, NULL, NULL, my_fuse_opt_proc)){
-    S3fsCurl::DestroyS3fsCurl();
-    s3fs_destroy_global_ssl();
+    OSSfsCurl::DestroyOSSfsCurl();
+    ossfs_destroy_global_ssl();
     exit(EXIT_FAILURE);
   }
 
   // [NOTE]
   // exclusive option check here.
   //
-  if(REDUCED_REDUNDANCY == S3fsCurl::GetStorageClass() && !S3fsCurl::IsSseDisable()){
-    S3FS_PRN_EXIT("use_sse option could not be specified with storage class reduced_redundancy.");
-    S3fsCurl::DestroyS3fsCurl();
-    s3fs_destroy_global_ssl();
-    exit(EXIT_FAILURE);
-  }
-  if(!S3fsCurl::FinalCheckSse()){
-    S3FS_PRN_EXIT("something wrong about SSE options.");
-    S3fsCurl::DestroyS3fsCurl();
-    s3fs_destroy_global_ssl();
+  // TODO: storage_class
+  // if(REDUCED_REDUNDANCY == OSSfsCurl::GetStorageClass() && !OSSfsCurl::IsSseDisable()){
+  //   OSSFS_PRN_EXIT("use_sse option could not be specified with storage class reduced_redundancy.");
+  //   OSSfsCurl::DestroyOSSfsCurl();
+  //   ossfs_destroy_global_ssl();
+  //   exit(EXIT_FAILURE);
+  // }
+  if(!OSSfsCurl::FinalCheckSse()){
+    OSSFS_PRN_EXIT("something wrong about SSE options.");
+    OSSfsCurl::DestroyOSSfsCurl();
+    ossfs_destroy_global_ssl();
     exit(EXIT_FAILURE);
   }
 
   // The first plain argument is the bucket
   if(bucket.empty()){
-    S3FS_PRN_EXIT("missing BUCKET argument.");
+    OSSFS_PRN_EXIT("missing BUCKET argument.");
     show_usage();
-    S3fsCurl::DestroyS3fsCurl();
-    s3fs_destroy_global_ssl();
+    OSSfsCurl::DestroyOSSfsCurl();
+    ossfs_destroy_global_ssl();
     exit(EXIT_FAILURE);
   }
 
   // bucket names cannot contain upper case characters in virtual-hosted style
   if((!pathrequeststyle) && (lower(bucket) != bucket)){
-    S3FS_PRN_EXIT("BUCKET %s, name not compatible with virtual-hosted style.", bucket.c_str());
-    S3fsCurl::DestroyS3fsCurl();
-    s3fs_destroy_global_ssl();
+    OSSFS_PRN_EXIT("BUCKET %s, name not compatible with virtual-hosted style.", bucket.c_str());
+    OSSfsCurl::DestroyOSSfsCurl();
+    ossfs_destroy_global_ssl();
     exit(EXIT_FAILURE);
   }
 
   // check bucket name for illegal characters
   found = bucket.find_first_of("/:\\;!@#$%^&*?|+=");
   if(found != string::npos){
-    S3FS_PRN_EXIT("BUCKET %s -- bucket name contains an illegal character.", bucket.c_str());
-    S3fsCurl::DestroyS3fsCurl();
-    s3fs_destroy_global_ssl();
+    OSSFS_PRN_EXIT("BUCKET %s -- bucket name contains an illegal character.", bucket.c_str());
+    OSSfsCurl::DestroyOSSfsCurl();
+    ossfs_destroy_global_ssl();
     exit(EXIT_FAILURE);
   }
 
   if(!pathrequeststyle && STR2NCMP(host.c_str(), "https://") == 0 && bucket.find_first_of('.') != string::npos) {
-    S3FS_PRN_EXIT("BUCKET %s -- cannot mount bucket with . while using HTTPS without use_path_request_style", bucket.c_str());
-    S3fsCurl::DestroyS3fsCurl();
-    s3fs_destroy_global_ssl();
+    OSSFS_PRN_EXIT("BUCKET %s -- cannot mount bucket with . while using HTTPS without use_path_request_style", bucket.c_str());
+    OSSfsCurl::DestroyOSSfsCurl();
+    ossfs_destroy_global_ssl();
     exit(EXIT_FAILURE);
   }
 
@@ -5172,37 +5183,37 @@ int main(int argc, char* argv[])
   // if the mountpoint option was ever supplied
   if(NO_UTILITY_MODE == utility_mode){
     if(mountpoint.empty()){
-      S3FS_PRN_EXIT("missing MOUNTPOINT argument.");
+      OSSFS_PRN_EXIT("missing MOUNTPOINT argument.");
       show_usage();
-      S3fsCurl::DestroyS3fsCurl();
-      s3fs_destroy_global_ssl();
+      OSSfsCurl::DestroyOSSfsCurl();
+      ossfs_destroy_global_ssl();
       exit(EXIT_FAILURE);
     }
   }
 
   // error checking of command line arguments for compatibility
-  if(S3fsCurl::IsPublicBucket() && S3fsCurl::IsSetAccessKeys()){
-    S3FS_PRN_EXIT("specifying both public_bucket and the access keys options is invalid.");
-    S3fsCurl::DestroyS3fsCurl();
-    s3fs_destroy_global_ssl();
+  if(OSSfsCurl::IsPublicBucket() && OSSfsCurl::IsSetAccessKeys()){
+    OSSFS_PRN_EXIT("specifying both public_bucket and the access keys options is invalid.");
+    OSSfsCurl::DestroyOSSfsCurl();
+    ossfs_destroy_global_ssl();
     exit(EXIT_FAILURE);
   }
-  if(!passwd_file.empty() && S3fsCurl::IsSetAccessKeys()){
-    S3FS_PRN_EXIT("specifying both passwd_file and the access keys options is invalid.");
-    S3fsCurl::DestroyS3fsCurl();
-    s3fs_destroy_global_ssl();
+  if(!passwd_file.empty() && OSSfsCurl::IsSetAccessKeys()){
+    OSSFS_PRN_EXIT("specifying both passwd_file and the access keys options is invalid.");
+    OSSfsCurl::DestroyOSSfsCurl();
+    ossfs_destroy_global_ssl();
     exit(EXIT_FAILURE);
   }
-  if(!S3fsCurl::IsPublicBucket() && !load_iamrole && !is_ecs){
+  if(!OSSfsCurl::IsPublicBucket() && !load_iamrole && !is_ecs){
     if(EXIT_SUCCESS != get_access_keys()){
-      S3fsCurl::DestroyS3fsCurl();
-      s3fs_destroy_global_ssl();
+      OSSfsCurl::DestroyOSSfsCurl();
+      ossfs_destroy_global_ssl();
       exit(EXIT_FAILURE);
     }
-    if(!S3fsCurl::IsSetAccessKeys()){
-      S3FS_PRN_EXIT("could not establish security credentials, check documentation.");
-      S3fsCurl::DestroyS3fsCurl();
-      s3fs_destroy_global_ssl();
+    if(!OSSfsCurl::IsSetAccessKeys()){
+      OSSFS_PRN_EXIT("could not establish security credentials, check documentation.");
+      OSSfsCurl::DestroyOSSfsCurl();
+      ossfs_destroy_global_ssl();
       exit(EXIT_FAILURE);
     }
     // More error checking on the access key pair can be done
@@ -5211,9 +5222,9 @@ int main(int argc, char* argv[])
 
   // check cache dir permission
   if(!FdManager::CheckCacheDirExist() || !FdManager::CheckCacheTopDir() || !CacheFileStat::CheckCacheFileStatTopDir()){
-    S3FS_PRN_EXIT("could not allow cache directory permission, check permission of cache directories.");
-    S3fsCurl::DestroyS3fsCurl();
-    s3fs_destroy_global_ssl();
+    OSSFS_PRN_EXIT("could not allow cache directory permission, check permission of cache directories.");
+    OSSfsCurl::DestroyOSSfsCurl();
+    ossfs_destroy_global_ssl();
     exit(EXIT_FAILURE);
   }
 
@@ -5221,28 +5232,28 @@ int main(int argc, char* argv[])
   if(is_ibm_iam_auth){
 
     // check that default ACL is either public-read or private
-    string defaultACL = S3fsCurl::GetDefaultAcl();
+    string defaultACL = OSSfsCurl::GetDefaultAcl();
     if(defaultACL == "private"){
       // IBM's COS default ACL is private
-      // set acl as empty string to avoid sending x-amz-acl header
-      S3fsCurl::SetDefaultAcl("");
+      // set acl as empty string to avoid sending x-oss-acl header
+      OSSfsCurl::SetDefaultAcl("");
     }else if(defaultACL != "public-read"){
-      S3FS_PRN_EXIT("can only use 'public-read' or 'private' ACL while using ibm_iam_auth");
-      S3fsCurl::DestroyS3fsCurl();
-      s3fs_destroy_global_ssl();
+      OSSFS_PRN_EXIT("can only use 'public-read' or 'private' ACL while using ibm_iam_auth");
+      OSSfsCurl::DestroyOSSfsCurl();
+      ossfs_destroy_global_ssl();
       exit(EXIT_FAILURE);
     }
 
-    if(create_bucket && !S3fsCurl::IsSetAccessKeyID()){
-      S3FS_PRN_EXIT("missing service instance ID for bucket creation");
-      S3fsCurl::DestroyS3fsCurl();
-      s3fs_destroy_global_ssl();
+    if(create_bucket && !OSSfsCurl::IsSetAccessKeyID()){
+      OSSFS_PRN_EXIT("missing service instance ID for bucket creation");
+      OSSfsCurl::DestroyOSSfsCurl();
+      ossfs_destroy_global_ssl();
       exit(EXIT_FAILURE);
     }
   }
 
   // set user agent
-  S3fsCurl::InitUserAgent();
+  OSSfsCurl::InitUserAgent();
 
   // There's room for more command line error checking
 
@@ -5258,12 +5269,12 @@ int main(int argc, char* argv[])
   // - write our own host verification (this might be complex)
   // See issue #128strncasecmp
   /* 
-  if(1 == S3fsCurl::GetSslVerifyHostname()){
+  if(1 == OSSfsCurl::GetSslVerifyHostname()){
     found = bucket.find_first_of(".");
     if(found != string::npos){
       found = host.find("https:");
       if(found != string::npos){
-        S3FS_PRN_EXIT("Using https and a bucket name with periods is unsupported.");
+        OSSFS_PRN_EXIT("Using https and a bucket name with periods is unsupported.");
         exit(1);
       }
     }
@@ -5271,82 +5282,82 @@ int main(int argc, char* argv[])
   */
 
   if(NO_UTILITY_MODE != utility_mode){
-    int exitcode = s3fs_utility_processing(incomp_abort_time);
+    int exitcode = ossfs_utility_processing(incomp_abort_time);
 
-    S3fsCurl::DestroyS3fsCurl();
-    s3fs_destroy_global_ssl();
+    OSSfsCurl::DestroyOSSfsCurl();
+    ossfs_destroy_global_ssl();
     exit(exitcode);
   }
 
   // check free disk space
-  if(!FdManager::IsSafeDiskSpace(NULL, S3fsCurl::GetMultipartSize() * S3fsCurl::GetMaxParallelCount())){
-    S3FS_PRN_EXIT("There is no enough disk space for used as cache(or temporary) directory by s3fs.");
-    S3fsCurl::DestroyS3fsCurl();
-    s3fs_destroy_global_ssl();
+  if(!FdManager::IsSafeDiskSpace(NULL, OSSfsCurl::GetMultipartSize() * OSSfsCurl::GetMaxParallelCount())){
+    OSSFS_PRN_EXIT("There is no enough disk space for used as cache(or temporary) directory by ossfs.");
+    OSSfsCurl::DestroyOSSfsCurl();
+    ossfs_destroy_global_ssl();
     exit(EXIT_FAILURE);
   }
 
-  s3fs_oper.getattr   = s3fs_getattr;
-  s3fs_oper.readlink  = s3fs_readlink;
-  s3fs_oper.mknod     = s3fs_mknod;
-  s3fs_oper.mkdir     = s3fs_mkdir;
-  s3fs_oper.unlink    = s3fs_unlink;
-  s3fs_oper.rmdir     = s3fs_rmdir;
-  s3fs_oper.symlink   = s3fs_symlink;
-  s3fs_oper.rename    = s3fs_rename;
-  s3fs_oper.link      = s3fs_link;
+  ossfs_oper.getattr   = ossfs_getattr;
+  ossfs_oper.readlink  = ossfs_readlink;
+  ossfs_oper.mknod     = ossfs_mknod;
+  ossfs_oper.mkdir     = ossfs_mkdir;
+  ossfs_oper.unlink    = ossfs_unlink;
+  ossfs_oper.rmdir     = ossfs_rmdir;
+  ossfs_oper.symlink   = ossfs_symlink;
+  ossfs_oper.rename    = ossfs_rename;
+  ossfs_oper.link      = ossfs_link;
   if(!nocopyapi){
-    s3fs_oper.chmod   = s3fs_chmod;
-    s3fs_oper.chown   = s3fs_chown;
-    s3fs_oper.utimens = s3fs_utimens;
+    ossfs_oper.chmod   = ossfs_chmod;
+    ossfs_oper.chown   = ossfs_chown;
+    ossfs_oper.utimens = ossfs_utimens;
   }else{
-    s3fs_oper.chmod   = s3fs_chmod_nocopy;
-    s3fs_oper.chown   = s3fs_chown_nocopy;
-    s3fs_oper.utimens = s3fs_utimens_nocopy;
+    ossfs_oper.chmod   = ossfs_chmod_nocopy;
+    ossfs_oper.chown   = ossfs_chown_nocopy;
+    ossfs_oper.utimens = ossfs_utimens_nocopy;
   }
-  s3fs_oper.truncate  = s3fs_truncate;
-  s3fs_oper.open      = s3fs_open;
-  s3fs_oper.read      = s3fs_read;
-  s3fs_oper.write     = s3fs_write;
-  s3fs_oper.statfs    = s3fs_statfs;
-  s3fs_oper.flush     = s3fs_flush;
-  s3fs_oper.fsync     = s3fs_fsync;
-  s3fs_oper.release   = s3fs_release;
-  s3fs_oper.opendir   = s3fs_opendir;
-  s3fs_oper.readdir   = s3fs_readdir;
-  s3fs_oper.init      = s3fs_init;
-  s3fs_oper.destroy   = s3fs_destroy;
-  s3fs_oper.access    = s3fs_access;
-  s3fs_oper.create    = s3fs_create;
+  ossfs_oper.truncate  = ossfs_truncate;
+  ossfs_oper.open      = ossfs_open;
+  ossfs_oper.read      = ossfs_read;
+  ossfs_oper.write     = ossfs_write;
+  ossfs_oper.statfs    = ossfs_statfs;
+  ossfs_oper.flush     = ossfs_flush;
+  ossfs_oper.fsync     = ossfs_fsync;
+  ossfs_oper.release   = ossfs_release;
+  ossfs_oper.opendir   = ossfs_opendir;
+  ossfs_oper.readdir   = ossfs_readdir;
+  ossfs_oper.init      = ossfs_init;
+  ossfs_oper.destroy   = ossfs_destroy;
+  ossfs_oper.access    = ossfs_access;
+  ossfs_oper.create    = ossfs_create;
   // extended attributes
   if(is_use_xattr){
-    s3fs_oper.setxattr    = s3fs_setxattr;
-    s3fs_oper.getxattr    = s3fs_getxattr;
-    s3fs_oper.listxattr   = s3fs_listxattr;
-    s3fs_oper.removexattr = s3fs_removexattr;
+    ossfs_oper.setxattr    = ossfs_setxattr;
+    ossfs_oper.getxattr    = ossfs_getxattr;
+    ossfs_oper.listxattr   = ossfs_listxattr;
+    ossfs_oper.removexattr = ossfs_removexattr;
   }
 
   // set signal handler for debugging
-  if(!set_s3fs_usr2_handler()){
-    S3FS_PRN_EXIT("could not set signal handler for SIGUSR2.");
-    S3fsCurl::DestroyS3fsCurl();
-    s3fs_destroy_global_ssl();
+  if(!set_ossfs_usr2_handler()){
+    OSSFS_PRN_EXIT("could not set signal handler for SIGUSR2.");
+    OSSfsCurl::DestroyOSSfsCurl();
+    ossfs_destroy_global_ssl();
     exit(EXIT_FAILURE);
   }
 
   // now passing things off to fuse, fuse will finish evaluating the command line args
-  fuse_res = fuse_main(custom_args.argc, custom_args.argv, &s3fs_oper, NULL);
+  fuse_res = fuse_main(custom_args.argc, custom_args.argv, &ossfs_oper, NULL);
   fuse_opt_free_args(&custom_args);
 
   // Destroy curl
-  if(!S3fsCurl::DestroyS3fsCurl()){
-    S3FS_PRN_WARN("Could not release curl library.");
+  if(!OSSfsCurl::DestroyOSSfsCurl()){
+    OSSFS_PRN_WARN("Could not release curl library.");
   }
-  s3fs_destroy_global_ssl();
+  ossfs_destroy_global_ssl();
 
   // cleanup xml2
   xmlCleanupParser();
-  S3FS_MALLOCTRIM(0);
+  OSSFS_MALLOCTRIM(0);
 
   exit(fuse_res);
 }

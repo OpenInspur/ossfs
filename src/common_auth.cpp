@@ -1,5 +1,5 @@
 /*
- * s3fs - FUSE-based file system backed by Amazon S3
+ * ossfs - FUSE-based file system backed by InspurCloud OSS
  *
  * Copyright(C) 2007 Randy Rizun <rrizun@gmail.com>
  *
@@ -24,7 +24,7 @@
 #include <string.h>
 #include <string>
 
-#include "s3fs_auth.h"
+#include "ossfs_auth.h"
 #include "string_util.h"
 
 using namespace std;
@@ -32,16 +32,16 @@ using namespace std;
 //-------------------------------------------------------------------
 // Utility Function
 //-------------------------------------------------------------------
-string s3fs_get_content_md5(int fd)
+string ossfs_get_content_md5(int fd)
 {
   unsigned char* md5hex;
   char* base64;
   string Signature;
 
-  if(NULL == (md5hex = s3fs_md5hexsum(fd, 0, -1))){
+  if(NULL == (md5hex = ossfs_md5hexsum(fd, 0, -1))){
     return string("");
   }
-  if(NULL == (base64 = s3fs_base64(md5hex, get_md5_digest_length()))){
+  if(NULL == (base64 = ossfs_base64(md5hex, get_md5_digest_length()))){
     return string("");  // ENOMEM
   }
   free(md5hex);
@@ -52,28 +52,28 @@ string s3fs_get_content_md5(int fd)
   return Signature;
 }
 
-string s3fs_md5sum(int fd, off_t start, ssize_t size)
+string ossfs_md5sum(int fd, off_t start, ssize_t size)
 {
   size_t digestlen = get_md5_digest_length();
   unsigned char* md5hex;
 
-  if(NULL == (md5hex = s3fs_md5hexsum(fd, start, size))){
+  if(NULL == (md5hex = ossfs_md5hexsum(fd, start, size))){
     return string("");
   }
 
-  std::string md5 = s3fs_hex(md5hex, digestlen);
+  std::string md5 = ossfs_hex(md5hex, digestlen);
   free(md5hex);
 
   return md5;
 }
 
-string s3fs_sha256sum(int fd, off_t start, ssize_t size)
+string ossfs_sha256sum(int fd, off_t start, ssize_t size)
 {
   size_t digestlen = get_sha256_digest_length();
   char sha256[2 * digestlen + 1];
   unsigned char* sha256hex;
 
-  if(NULL == (sha256hex = s3fs_sha256hexsum(fd, start, size))){
+  if(NULL == (sha256hex = ossfs_sha256hexsum(fd, start, size))){
     return string("");
   }
 

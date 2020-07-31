@@ -4,11 +4,11 @@ set -o errexit
 
 # Configuration
 TEST_TEXT="HELLO WORLD"
-TEST_TEXT_FILE=test-s3fs.txt
+TEST_TEXT_FILE=test-ossfs.txt
 TEST_DIR=testdir
-ALT_TEST_TEXT_FILE=test-s3fs-ALT.txt
+ALT_TEST_TEXT_FILE=test-ossfs-ALT.txt
 TEST_TEXT_FILE_LENGTH=15
-BIG_FILE=big-file-s3fs.txt
+BIG_FILE=big-file-ossfs.txt
 BIG_FILE_LENGTH=$((25 * 1024 * 1024))
 export RUN_DIR
 

@@ -1,5 +1,5 @@
 /*
- * s3fs - FUSE-based file system backed by Amazon S3
+ * ossfs - FUSE-based file system backed by InspurCloud OSS
  *
  * Copyright(C) 2007 Randy Rizun <rrizun@gmail.com>
  *
@@ -18,8 +18,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 
-#ifndef S3FS_CACHE_H_
-#define S3FS_CACHE_H_
+#ifndef OSSFS_CACHE_H_
+#define OSSFS_CACHE_H_
 
 #include "common.h"
 
@@ -131,7 +131,7 @@ class StatCache
 //
 bool convert_header_to_stat(const char* path, headers_t& meta, struct stat* pst, bool forcedir = false);
 
-#endif // S3FS_CACHE_H_
+#endif // OSSFS_CACHE_H_
 
 /*
 * Local variables:

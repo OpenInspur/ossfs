@@ -1,7 +1,7 @@
 #!/bin/sh
 #
 # Merge old directory object to new.
-# For s3fs after v1.64
+# For ossfs after v1.64
 #
 
 ###
@@ -13,9 +13,9 @@ UsageFunction()
     echo "  -h   print usage"
     echo "  -y   no confirm"
     echo "  -all force all directories"
-    echo "       There is no -all option is only to merge for other S3 client."
+    echo "       There is no -all option is only to merge for other OSS client."
     echo "       If -all is specified, this shell script merge all directory"
-    echo "       for s3fs old version."
+    echo "       for ossfs old version."
     echo ""
 }
 
@@ -61,8 +61,8 @@ fi
 ### Caution
 echo "#############################################################################"
 echo "[CAUTION]"
-echo "This program merges a directory made in s3fs which is older than version 1.64."
-echo "And made in other S3 client application."
+echo "This program merges a directory made in ossfs which is older than version 1.64."
+echo "And made in other OSS client application."
 echo "This program may be have bugs which are not fixed yet."
 echo "Please execute this program by responsibility of your own."
 echo "#############################################################################"
@@ -104,7 +104,7 @@ for DIR in $DIRLIST; do
     if [ "$ALLYES" = "no" ]; then
         ### Skip "d---------" directories.
         ### Other clients make directory object "dir/" which don't have
-        ### "x-amz-meta-mode" attribute.
+        ### "x-oss-meta-mode" attribute.
         ### Then these directories is "d---------", it is target directory.
         DIRPERMIT=`ls -ld --time-style=+'%Y%m%d%H%M' $DIR | awk '{print $1}'`
         if [ "$DIRPERMIT" != "d---------" ]; then

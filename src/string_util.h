@@ -1,5 +1,5 @@
 /*
- * s3fs - FUSE-based file system backed by Amazon S3
+ * ossfs - FUSE-based file system backed by InspurCloud OSS
  *
  * Copyright(C) 2007 Randy Rizun <rrizun@gmail.com>
  *
@@ -17,8 +17,8 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
-#ifndef S3FS_STRING_UTIL_H_
-#define S3FS_STRING_UTIL_H_
+#ifndef OSSFS_STRING_UTIL_H_
+#define OSSFS_STRING_UTIL_H_
 
 /*
  * A collection of string utilities for manipulating URLs and HTTP responses.
@@ -36,7 +36,7 @@ static inline int STR2NCMP(const char *str1, const char *str2) { return strncmp(
 template <class T> std::string str(T value);
 
 // Convert string to off_t.  Does not signal invalid input.
-off_t s3fs_strtoofft(const char* str, bool is_base_16 = false);
+off_t ossfs_strtoofft(const char* str, bool is_base_16 = false);
 
 std::string trim_left(const std::string &s, const std::string &t = SPACES);
 std::string trim_right(const std::string &s, const std::string &t = SPACES);
@@ -54,16 +54,16 @@ std::string urlDecode(const std::string& s);
 bool takeout_str_dquart(std::string& str);
 bool get_keyword_value(std::string& target, const char* keyword, std::string& value);
 
-std::string s3fs_hex(const unsigned char* input, size_t length);
-char* s3fs_base64(const unsigned char* input, size_t length);
-unsigned char* s3fs_decode64(const char* input, size_t* plength);
+std::string ossfs_hex(const unsigned char* input, size_t length);
+char* ossfs_base64(const unsigned char* input, size_t length);
+unsigned char* ossfs_decode64(const char* input, size_t* plength);
 
-bool s3fs_wtf8_encode(const char *s, std::string *result);
-std::string s3fs_wtf8_encode(const std::string &s);
-bool s3fs_wtf8_decode(const char *s, std::string *result);
-std::string s3fs_wtf8_decode(const std::string &s);
+bool ossfs_wtf8_encode(const char *s, std::string *result);
+std::string ossfs_wtf8_encode(const std::string &s);
+bool ossfs_wtf8_decode(const char *s, std::string *result);
+std::string ossfs_wtf8_decode(const std::string &s);
 
-#endif // S3FS_STRING_UTIL_H_
+#endif // OSSFS_STRING_UTIL_H_
 
 /*
 * Local variables:

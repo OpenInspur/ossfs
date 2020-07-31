@@ -1,5 +1,5 @@
 /*
- * s3fs - FUSE-based file system backed by Amazon S3
+ * ossfs - FUSE-based file system backed by InspurCloud OSS
  *
  * Copyright(C) 2007 Randy Rizun <rrizun@gmail.com>
  *
@@ -18,8 +18,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 
-#ifndef S3FS_SEMAPHORE_H_
-#define S3FS_SEMAPHORE_H_
+#ifndef OSSFS_SEMAPHORE_H_
+#define OSSFS_SEMAPHORE_H_
 
 // portability wrapper for sem_t since macOS does not implement it
 
@@ -72,4 +72,4 @@ class Semaphore
 
 #endif
 
-#endif // S3FS_SEMAPHORE_H_
+#endif // OSSFS_SEMAPHORE_H_
